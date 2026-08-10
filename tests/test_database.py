@@ -40,6 +40,18 @@ def test_add_list_and_delete_cascades_endpoints(database_path) -> None:
         repository.get(AppKind.CODEX, provider.id)
 
 
+def test_add_many_rolls_back_when_a_later_provider_conflicts(database_path) -> None:
+    repository = ProviderRepository(database_path)
+    existing = _new_provider()
+    imported = _new_provider()
+    repository.add(existing)
+
+    with pytest.raises(ProviderError, match="already exists"):
+        repository.add_many((imported, existing))
+
+    assert [provider.id for provider in repository.list()] == [existing.id]
+
+
 def test_delete_rejects_official_provider(database_path) -> None:
     repository = ProviderRepository(database_path)
     provider = _new_provider(AppKind.CLAUDE)
@@ -54,6 +66,26 @@ def test_delete_rejects_official_provider(database_path) -> None:
         )
     with pytest.raises(ProviderError, match="Official"):
         repository.delete(AppKind.CLAUDE, "claude-official")
+
+
+def test_reset_non_official_deletes_only_custom_providers(database_path) -> None:
+    repository = ProviderRepository(database_path)
+    custom = _new_provider(AppKind.CLAUDE)
+    repository.add(custom)
+    with sqlite3.connect(database_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO providers (id, app_type, name, settings_config, category, meta, is_current,
+                                   in_failover_queue, cost_multiplier)
+            VALUES (?, ?, ?, ?, 'official', '{}', 0, 0, '1.0')
+            """,
+            ("claude-official", "claude", "Claude", "{}"),
+        )
+
+    assert repository.reset_non_official() == 1
+    assert [provider.id for provider in repository.list()] == ["claude-official"]
+    with sqlite3.connect(database_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM provider_endpoints").fetchone()[0] == 0
 
 
 def test_delete_is_scoped_by_app_type(database_path) -> None:

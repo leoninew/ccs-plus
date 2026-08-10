@@ -20,12 +20,15 @@ uv run ccs-plus providers list
 ```text
 ccs-plus providers list [--app claude|codex|grok] [--json]
 ccs-plus providers add <claude|codex|grok> --name <name> --endpoint <url> --model <id>
+ccs-plus providers export [file]
+ccs-plus providers import <file>
+ccs-plus providers reset [--no-dry-run]
 ccs-plus providers show <name>
 ccs-plus providers delete <claude|codex|grok> <name> --yes
 ccs-plus launch <claude|codex|grok> --provider <name> [--cwd <path>]
 ```
 
-所有命令均支持 `-h` 和 `--help`。`providers show` 会输出已存储的 API Key，请避免在共享终端中使用。
+所有命令均支持 `-h` 和 `--help`。`providers export` 和 `providers import` 从 `CCS_PLUS_ENCRYPTION_KEY` 读取通用 Fernet 加密密钥；在 `.env` 设置实际随机值。省略导出文件名时生成 `data/providers-YYYYMMDD-HHMMSS.json`。`providers show` 会输出已存储的 API Key，请避免在共享终端中使用。
 
 ## 开发
 

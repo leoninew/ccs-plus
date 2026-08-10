@@ -60,6 +60,7 @@ def settings_root(tmp_path: Path, database_path: Path) -> Path:
                 'claude_home = "data/claude"',
                 'codex_home = "data/codex"',
                 'grok_home = "data/grok"',
+                'encryption_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="',
                 "",
             ]
         ),

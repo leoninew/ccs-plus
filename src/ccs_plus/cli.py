@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -13,6 +14,7 @@ from ccs_plus.adapters import build_provider, display_configuration, runtime_fro
 from ccs_plus.database import ProviderRepository
 from ccs_plus.domain import AppKind, NewProvider, Provider, ProviderError, validate_new_provider
 from ccs_plus.launcher import build_launch_spec, launch
+from ccs_plus.provider_transfer import build_backup_document, parse_backup_document
 from ccs_plus.settings import AppSettings, load_settings
 
 logger = logging.getLogger(__name__)
@@ -38,7 +40,7 @@ def main() -> None:
 
 @main.group(context_settings=HELP_CONTEXT_SETTINGS)
 def providers() -> None:
-    """List, add, and delete cc-switch providers."""
+    """List, add, export, import, reset, and delete cc-switch providers."""
 
 
 @providers.command("list", context_settings=HELP_CONTEXT_SETTINGS)
@@ -96,6 +98,60 @@ def add_provider(
         provider = build_provider(value)
         _repository().add(provider)
         click.echo(f"Added {provider.app.value} provider {provider.id}.")
+    except ProviderError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@providers.command("export", context_settings=HELP_CONTEXT_SETTINGS)
+@click.argument("output_path", type=click.Path(path_type=Path, dir_okay=False), required=False)
+def export_providers(output_path: Path | None) -> None:
+    """Write custom providers to an encrypted JSON backup."""
+    try:
+        output_path = output_path or _default_backup_path()
+        document = build_backup_document(_repository().list(), _encryption_key())
+        _write_backup(output_path, document)
+        records = document["providers"]
+        assert isinstance(records, list)
+        click.echo(f"Exported {len(records)} custom providers to {output_path}.")
+    except ProviderError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@providers.command("import", context_settings=HELP_CONTEXT_SETTINGS)
+@click.argument("input_path", type=click.Path(path_type=Path, dir_okay=False, exists=True))
+def import_providers(input_path: Path) -> None:
+    """Read an encrypted JSON backup and add every validated provider."""
+    try:
+        document = _read_backup(input_path)
+        values = parse_backup_document(document, _encryption_key())
+        repository = _repository()
+        _validate_import_names(values, repository.list())
+        repository.add_many(build_provider(value) for value in values)
+        click.echo(f"Imported {len(values)} custom providers from {input_path}.")
+    except ProviderError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@providers.command("reset", context_settings=HELP_CONTEXT_SETTINGS)
+@click.option(
+    "--no-dry-run",
+    is_flag=True,
+    help="Delete all non-official providers instead of previewing the reset.",
+)
+def reset_providers(no_dry_run: bool) -> None:
+    """Preview or delete every non-official provider."""
+    try:
+        repository = _repository()
+        targets = [provider for provider in repository.list() if not provider.is_official]
+        if not no_dry_run:
+            count = len(targets)
+            noun = "provider" if count == 1 else "providers"
+            click.echo(f"Dry run: would delete {count} non-official {noun}.")
+            for provider in targets:
+                click.echo(f"- {provider.app.value}/{provider.name}")
+            return
+        deleted = repository.reset_non_official()
+        click.echo(f"Deleted {deleted} non-official providers.")
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -178,6 +234,49 @@ def _configure_verbose_logging() -> None:
         format="%(levelname)s %(name)s: %(message)s",
         force=True,
     )
+
+
+def _encryption_key() -> str:
+    return _settings().encryption_key
+
+
+def _default_backup_path() -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = _settings().project_root / "data" / f"providers-{timestamp}.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise ProviderError(f"Unable to create export directory {path.parent}: {exc}") from exc
+    return path
+
+
+def _write_backup(path: Path, document: dict[str, object]) -> None:
+    try:
+        with path.open("x", encoding="utf-8") as handle:
+            json.dump(document, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+    except FileExistsError as exc:
+        raise ProviderError(f"Export file already exists: {path}") from exc
+    except OSError as exc:
+        raise ProviderError(f"Unable to write export file {path}: {exc}") from exc
+
+
+def _read_backup(path: Path) -> object:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ProviderError(f"Unable to read import file {path}: {exc}") from exc
+
+
+def _validate_import_names(values: list[NewProvider], existing: list[Provider]) -> None:
+    existing_names = {(provider.app, provider.name.strip().casefold()) for provider in existing}
+    conflicts = [
+        f"{value.app.value}/{value.name.strip()}"
+        for value in values
+        if (value.app, value.name.strip().casefold()) in existing_names
+    ]
+    if conflicts:
+        raise ProviderError(f"Providers already exist: {', '.join(conflicts)}")
 
 
 def _render_providers(

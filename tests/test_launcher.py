@@ -18,6 +18,7 @@ def _settings(root: Path) -> AppSettings:
         claude_home=root / "claude",
         codex_home=root / "codex",
         grok_home=root / "grok",
+        encryption_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
     )
 
 

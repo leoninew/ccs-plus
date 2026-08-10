@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Iterable
 from pathlib import Path
 
-from ccs_plus.domain import AppKind, Provider, ProviderError
+from ccs_plus.domain import OFFICIAL_PROVIDER_IDS, AppKind, Provider, ProviderError
 
 REQUIRED_PROVIDER_COLUMNS = {
     "id",
@@ -121,51 +121,64 @@ class ProviderRepository:
             conn.close()
 
     def add(self, provider: Provider) -> None:
-        if not provider.endpoints:
-            raise ProviderError("A provider must have at least one endpoint.")
+        self.add_many((provider,))
+
+    def add_many(self, providers: Iterable[Provider]) -> None:
+        """Atomically add a set of providers and their endpoint rows."""
+        records = tuple(providers)
+        identities: set[tuple[str, AppKind]] = set()
+        for provider in records:
+            if not provider.endpoints:
+                raise ProviderError("A provider must have at least one endpoint.")
+            identity = (provider.id, provider.app)
+            if identity in identities:
+                raise ProviderError(f"Provider appears more than once: {provider.id}")
+            identities.add(identity)
+        if not records:
+            return
         conn = self._connect()
         try:
             self._preflight(conn)
             conn.execute("BEGIN IMMEDIATE")
             try:
-                existing = conn.execute(
-                    "SELECT 1 FROM providers WHERE id = ? AND app_type = ?",
-                    (provider.id, provider.app.db_app_type),
-                ).fetchone()
-                if existing is not None:
-                    raise ProviderError(f"Provider already exists: {provider.id}")
-
-                conn.execute(
-                    """
-                    INSERT INTO providers (
-                        id, app_type, name, settings_config, category, created_at, notes, meta,
-                        is_current, in_failover_queue
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
-                    """,
-                    (
-                        provider.id,
-                        provider.app.db_app_type,
-                        provider.name,
-                        json.dumps(provider.settings_config, ensure_ascii=False),
-                        provider.category,
-                        provider.created_at,
-                        provider.notes,
-                        json.dumps(provider.meta, ensure_ascii=False),
-                    ),
-                )
-                for endpoint in provider.endpoints:
+                for provider in records:
+                    existing = conn.execute(
+                        "SELECT 1 FROM providers WHERE id = ? AND app_type = ?",
+                        (provider.id, provider.app.db_app_type),
+                    ).fetchone()
+                    if existing is not None:
+                        raise ProviderError(f"Provider already exists: {provider.id}")
                     conn.execute(
                         """
-                        INSERT INTO provider_endpoints (provider_id, app_type, url, added_at)
-                        VALUES (?, ?, ?, ?)
+                        INSERT INTO providers (
+                            id, app_type, name, settings_config, category, created_at, notes, meta,
+                            is_current, in_failover_queue
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)
                         """,
                         (
                             provider.id,
                             provider.app.db_app_type,
-                            endpoint,
+                            provider.name,
+                            json.dumps(provider.settings_config, ensure_ascii=False),
+                            provider.category,
                             provider.created_at,
+                            provider.notes,
+                            json.dumps(provider.meta, ensure_ascii=False),
                         ),
                     )
+                    for endpoint in provider.endpoints:
+                        conn.execute(
+                            """
+                            INSERT INTO provider_endpoints (provider_id, app_type, url, added_at)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (
+                                provider.id,
+                                provider.app.db_app_type,
+                                endpoint,
+                                provider.created_at,
+                            ),
+                        )
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -205,6 +218,34 @@ class ProviderRepository:
                 raise
         except sqlite3.Error as exc:
             raise ProviderError(f"Unable to delete provider: {exc}") from exc
+        finally:
+            conn.close()
+
+    def reset_non_official(self) -> int:
+        """Delete all non-official providers in one transaction."""
+        conn = self._connect()
+        try:
+            self._preflight(conn)
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                rows = conn.execute("SELECT id, app_type, category FROM providers").fetchall()
+                targets = [
+                    (row["id"], row["app_type"])
+                    for row in rows
+                    if row["id"] not in OFFICIAL_PROVIDER_IDS and row["category"] != "official"
+                ]
+                for provider_id, app_type in targets:
+                    conn.execute(
+                        "DELETE FROM providers WHERE id = ? AND app_type = ?",
+                        (provider_id, app_type),
+                    )
+                conn.commit()
+                return len(targets)
+            except Exception:
+                conn.rollback()
+                raise
+        except sqlite3.Error as exc:
+            raise ProviderError(f"Unable to reset providers: {exc}") from exc
         finally:
             conn.close()
 

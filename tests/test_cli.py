@@ -41,6 +41,9 @@ def test_short_help_option_matches_long_help_for_every_command() -> None:
         ("providers",),
         ("providers", "list"),
         ("providers", "add"),
+        ("providers", "export"),
+        ("providers", "import"),
+        ("providers", "reset"),
         ("providers", "show"),
         ("providers", "delete"),
         ("launch",),
@@ -68,6 +71,7 @@ def test_launch_selects_provider_by_name(monkeypatch, tmp_path) -> None:
         claude_home=tmp_path / "claude",
         codex_home=tmp_path / "codex",
         grok_home=tmp_path / "grok",
+        encryption_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
     )
     selected = []
 
@@ -108,6 +112,7 @@ def test_launch_verbose_configures_logging_and_does_not_log_api_key(
         claude_home=tmp_path / "claude",
         codex_home=tmp_path / "codex",
         grok_home=tmp_path / "grok",
+        encryption_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
     )
     logging_options = []
 
@@ -219,6 +224,134 @@ def test_provider_add_does_not_echo_api_key(monkeypatch) -> None:
     assert len(added) == 1
     assert added[0].app is AppKind.CODEX
     assert "add-secret-key" not in result.output
+
+
+def test_provider_export_writes_default_encrypted_backup(monkeypatch, tmp_path) -> None:
+    provider = _provider()
+    settings = AppSettings(
+        project_root=tmp_path,
+        database_path=tmp_path / "cc-switch.db",
+        claude_home=tmp_path / "claude",
+        codex_home=tmp_path / "codex",
+        grok_home=tmp_path / "grok",
+        encryption_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    )
+
+    class Repository:
+        def list(self):
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    monkeypatch.setattr(
+        "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    )
+
+    result = CliRunner().invoke(main, ["providers", "export"])
+
+    assert result.exit_code == 0
+    assert "Exported 1 custom providers" in result.output
+    output_path = next((tmp_path / "data").glob("providers-*.json"))
+    assert "cli-secret-key" not in output_path.read_text(encoding="utf-8")
+
+
+def test_provider_import_validates_before_writing(monkeypatch, tmp_path) -> None:
+    from ccs_plus.provider_transfer import build_backup_document
+
+    document = build_backup_document([_provider()], "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+    document["providers"][0]["endpoint"] = "not-a-url"
+    input_path = tmp_path / "providers.json"
+    input_path.write_text(json.dumps(document), encoding="utf-8")
+    added = []
+
+    class Repository:
+        def list(self):
+            return []
+
+        def add_many(self, providers):
+            added.extend(providers)
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    monkeypatch.setattr(
+        "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    )
+
+    result = CliRunner().invoke(main, ["providers", "import", str(input_path)])
+
+    assert result.exit_code != 0
+    assert "Endpoint must be an absolute http or https URL" in result.output
+    assert added == []
+
+
+def test_provider_import_adds_all_validated_providers(monkeypatch, tmp_path) -> None:
+    from ccs_plus.provider_transfer import build_backup_document
+
+    input_path = tmp_path / "providers.json"
+    input_path.write_text(
+        json.dumps(
+            build_backup_document([_provider()], "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+        ),
+        encoding="utf-8",
+    )
+    added = []
+
+    class Repository:
+        def list(self):
+            return []
+
+        def add_many(self, providers):
+            added.extend(providers)
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    monkeypatch.setattr(
+        "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    )
+
+    result = CliRunner().invoke(main, ["providers", "import", str(input_path)])
+
+    assert result.exit_code == 0
+    assert "Imported 1 custom providers" in result.output
+    assert len(added) == 1
+    assert added[0].name == "Example Provider"
+
+
+def test_provider_reset_defaults_to_dry_run(monkeypatch) -> None:
+    provider = _provider()
+
+    class Repository:
+        def list(self):
+            return [provider]
+
+        def reset_non_official(self):
+            raise AssertionError("Dry run must not delete providers.")
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+
+    result = CliRunner().invoke(main, ["providers", "reset"])
+
+    assert result.exit_code == 0
+    assert "would delete 1 non-official provider" in result.output
+    assert "claude/Example Provider" in result.output
+
+
+def test_provider_reset_deletes_non_official_providers(monkeypatch) -> None:
+    deleted = []
+
+    class Repository:
+        def list(self):
+            return []
+
+        def reset_non_official(self):
+            deleted.append(True)
+            return 2
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+
+    result = CliRunner().invoke(main, ["providers", "reset", "--no-dry-run"])
+
+    assert result.exit_code == 0
+    assert deleted == [True]
+    assert result.output == "Deleted 2 non-official providers.\n"
 
 
 def test_provider_show_includes_unredacted_key_configuration(monkeypatch) -> None:
