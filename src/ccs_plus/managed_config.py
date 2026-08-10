@@ -15,7 +15,7 @@ from tomlkit import TOMLDocument
 
 from ccs_plus.domain import AppKind, ProviderError, RuntimeProvider
 
-_CODEX_PERMISSION_PROFILE = "ccs_plus_workspace_net"
+_CODEX_PERMISSION_PROFILE = ":danger-full-access"
 
 
 @dataclass(frozen=True)
@@ -63,28 +63,10 @@ def _ensure_codex_profile(
         document["approval_policy"] = "never"
         document["default_permissions"] = _CODEX_PERMISSION_PROFILE
 
-        # Start with the non-admin Windows sandbox so launches work on machines
-        # where elevated sandbox-user logon rights are unavailable. Retain a
-        # valid selection written by Codex for an existing profile.
         if existing is not None:
             projects = existing.get("projects")
             if isinstance(projects, Mapping):
                 document["projects"] = deepcopy(projects)
-        windows = tomlkit.table()
-        windows["sandbox"] = _existing_windows_sandbox(existing)
-        document["windows"] = windows
-
-        permissions = tomlkit.table()
-        workspace_network = tomlkit.table()
-        workspace_network["extends"] = ":workspace"
-        network = tomlkit.table()
-        network["enabled"] = True
-        domains = tomlkit.table()
-        domains["*"] = "allow"
-        network["domains"] = domains
-        workspace_network["network"] = network
-        permissions[_CODEX_PERMISSION_PROFILE] = workspace_network
-        document["permissions"] = permissions
 
         providers = tomlkit.table()
         provider = tomlkit.table()
@@ -104,16 +86,6 @@ def _parse_codex_profile(content: str, path: Path) -> TOMLDocument:
         return tomlkit.parse(content)
     except Exception as exc:
         raise ProviderError(f"Managed Codex profile is invalid TOML: {path}: {exc}") from exc
-
-
-def _existing_windows_sandbox(document: object) -> str:
-    if isinstance(document, Mapping):
-        windows = document.get("windows")
-        if isinstance(windows, Mapping):
-            mode = str(windows.get("sandbox", ""))
-            if mode in {"elevated", "unelevated"}:
-                return mode
-    return "unelevated"
 
 
 def _ensure_grok_model(

@@ -23,7 +23,7 @@ def _runtime(app: AppKind):
     return runtime_from_provider(provider)
 
 
-def test_codex_profile_has_permissions_but_no_api_key(tmp_path) -> None:
+def test_codex_profile_has_full_access_but_no_api_key(tmp_path) -> None:
     runtime = _runtime(AppKind.CODEX)
     profile = ensure_managed_config(runtime, tmp_path, None, None)
     path = tmp_path / f"{profile.name}.config.toml"
@@ -32,19 +32,16 @@ def test_codex_profile_has_permissions_but_no_api_key(tmp_path) -> None:
 
     assert "managed-secret-key" not in content
     assert document["approval_policy"] == "never"
-    assert document["default_permissions"] == "ccs_plus_workspace_net"
-    permission = document["permissions"]["ccs_plus_workspace_net"]
-    assert permission["extends"] == ":workspace"
-    assert permission["network"]["enabled"] is True
-    assert permission["network"]["domains"]["*"] == "allow"
-    assert document["windows"]["sandbox"] == "unelevated"
+    assert document["default_permissions"] == ":danger-full-access"
+    assert "permissions" not in document
+    assert "windows" not in document
     # Permission profiles and legacy sandbox settings do not compose.
     assert "sandbox_mode" not in document
     assert "sandbox_workspace_write" not in document
     assert document["model_providers"][profile.name]["env_key"] == profile.env_key
 
 
-def test_codex_profile_preserves_windows_sandbox_and_project_trust(tmp_path) -> None:
+def test_codex_profile_removes_sandbox_config_and_preserves_project_trust(tmp_path) -> None:
     runtime = _runtime(AppKind.CODEX)
     profile = ensure_managed_config(runtime, tmp_path, None, None)
     path = tmp_path / f"{profile.name}.config.toml"
@@ -62,7 +59,7 @@ trust_level = "trusted"
     ensure_managed_config(runtime, tmp_path, None, None)
     document = tomlkit.parse(path.read_text(encoding="utf-8"))
 
-    assert document["windows"]["sandbox"] == "unelevated"
+    assert "windows" not in document
     assert document["projects"][r"d:\workspace"]["trust_level"] == "trusted"
 
 
