@@ -37,7 +37,7 @@ def test_codex_profile_has_permissions_but_no_api_key(tmp_path) -> None:
     assert permission["extends"] == ":workspace"
     assert permission["network"]["enabled"] is True
     assert permission["network"]["domains"]["*"] == "allow"
-    assert document["windows"]["sandbox"] == "elevated"
+    assert document["windows"]["sandbox"] == "unelevated"
     # Permission profiles and legacy sandbox settings do not compose.
     assert "sandbox_mode" not in document
     assert "sandbox_workspace_write" not in document

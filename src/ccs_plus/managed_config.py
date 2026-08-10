@@ -63,8 +63,9 @@ def _ensure_codex_profile(
         document["approval_policy"] = "never"
         document["default_permissions"] = _CODEX_PERMISSION_PROFILE
 
-        # Codex writes these choices back into the selected profile. Retain them
-        # across reconciliation so native Windows sandbox setup is not repeated.
+        # Start with the non-admin Windows sandbox so launches work on machines
+        # where elevated sandbox-user logon rights are unavailable. Retain a
+        # valid selection written by Codex for an existing profile.
         if existing is not None:
             projects = existing.get("projects")
             if isinstance(projects, Mapping):
@@ -112,7 +113,7 @@ def _existing_windows_sandbox(document: object) -> str:
             mode = str(windows.get("sandbox", ""))
             if mode in {"elevated", "unelevated"}:
                 return mode
-    return "elevated"
+    return "unelevated"
 
 
 def _ensure_grok_model(
