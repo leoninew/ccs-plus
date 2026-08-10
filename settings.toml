@@ -1,0 +1,8 @@
+[default]
+# cc-switch 的用户数据库。使用 ~ 以兼容 Windows、macOS 和 Linux。
+database_path = "~/.cc-switch/cc-switch.db"
+
+# 三种 CLI 的稳定状态目录。切换供应商不会改变这些目录。
+claude_home = "data/claude"
+codex_home = "data/codex"
+grok_home = "data/grok"

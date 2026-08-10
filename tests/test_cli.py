@@ -1,0 +1,278 @@
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import replace
+
+from click.testing import CliRunner
+
+from ccs_plus.adapters import build_provider
+from ccs_plus.cli import main
+from ccs_plus.domain import AppKind, NewProvider, Provider
+from ccs_plus.launcher import LaunchSpec
+from ccs_plus.settings import AppSettings
+
+
+def _provider():
+    return build_provider(
+        NewProvider(
+            app=AppKind.CLAUDE,
+            name="Example Provider",
+            endpoint="https://api.example.test/v1",
+            api_key="cli-secret-key",
+            model="example-model",
+            effort="high",
+            notes=None,
+        )
+    )
+
+
+def test_help_exposes_provider_and_launch_commands() -> None:
+    result = CliRunner().invoke(main, ["--help"])
+    assert result.exit_code == 0
+    assert "providers" in result.output
+    assert "launch" in result.output
+
+
+def test_short_help_option_matches_long_help_for_every_command() -> None:
+    runner = CliRunner()
+    commands = (
+        (),
+        ("providers",),
+        ("providers", "list"),
+        ("providers", "add"),
+        ("providers", "show"),
+        ("providers", "delete"),
+        ("launch",),
+    )
+    for command in commands:
+        short_help = runner.invoke(main, [*command, "-h"])
+        long_help = runner.invoke(main, [*command, "--help"])
+
+        assert short_help.exit_code == long_help.exit_code == 0
+        assert short_help.output == long_help.output
+
+
+def test_launch_help_makes_cwd_optional() -> None:
+    result = CliRunner().invoke(main, ["launch", "--help"])
+    assert result.exit_code == 0
+    assert "--cwd DIRECTORY  [required]" not in result.output
+    assert "-v, --verbose" in result.output
+
+
+def test_launch_selects_provider_by_name(monkeypatch, tmp_path) -> None:
+    provider = _provider()
+    settings = AppSettings(
+        project_root=tmp_path,
+        database_path=tmp_path / "cc-switch.db",
+        claude_home=tmp_path / "claude",
+        codex_home=tmp_path / "codex",
+        grok_home=tmp_path / "grok",
+    )
+    selected = []
+
+    class Repository:
+        def __init__(self, database_path):
+            assert database_path == settings.database_path
+
+        def get_by_name(self, app, name):
+            selected.append((app, name))
+            return provider
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr("ccs_plus.cli.ProviderRepository", Repository)
+    monkeypatch.setattr(
+        "ccs_plus.cli.build_launch_spec",
+        lambda provider, settings, cwd, model_override, effort_override: LaunchSpec(
+            argv=("native-cli",), cwd=tmp_path, env={}
+        ),
+    )
+    monkeypatch.setattr("ccs_plus.cli.launch", lambda spec: 0)
+
+    result = CliRunner().invoke(
+        main,
+        ["launch", "claude", "--provider", provider.name, "--cwd", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0
+    assert selected == [(AppKind.CLAUDE, provider.name)]
+
+
+def test_launch_verbose_configures_logging_and_does_not_log_api_key(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    provider = _provider()
+    settings = AppSettings(
+        project_root=tmp_path,
+        database_path=tmp_path / "cc-switch.db",
+        claude_home=tmp_path / "claude",
+        codex_home=tmp_path / "codex",
+        grok_home=tmp_path / "grok",
+    )
+    logging_options = []
+
+    class Repository:
+        def __init__(self, database_path):
+            assert database_path == settings.database_path
+
+        def get_by_name(self, app, name):
+            return provider
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr("ccs_plus.cli.ProviderRepository", Repository)
+    monkeypatch.setattr(
+        "ccs_plus.cli.build_launch_spec",
+        lambda provider, settings, cwd, model_override, effort_override: LaunchSpec(
+            argv=("native-cli",), cwd=tmp_path, env={"API_KEY": "cli-secret-key"}
+        ),
+    )
+    monkeypatch.setattr("ccs_plus.cli.launch", lambda spec: 0)
+    monkeypatch.setattr(
+        "ccs_plus.cli.logging.basicConfig", lambda **kwargs: logging_options.append(kwargs)
+    )
+    caplog.set_level(logging.INFO, logger="ccs_plus.cli")
+
+    result = CliRunner().invoke(main, ["launch", "claude", "--provider", provider.name, "-v"])
+
+    assert result.exit_code == 0
+    assert logging_options == [
+        {
+            "level": logging.INFO,
+            "format": "%(levelname)s %(name)s: %(message)s",
+            "force": True,
+        }
+    ]
+    assert "Launching claude with provider" in caplog.text
+    assert "cli-secret-key" not in caplog.text
+
+
+def test_provider_list_json_does_not_expose_api_key(monkeypatch) -> None:
+    provider = replace(_provider(), endpoints=("https://stale.example.test/v1",))
+
+    class Repository:
+        def list(self, apps):
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(main, ["providers", "list", "--json"])
+    assert result.exit_code == 0
+    assert provider.id not in result.output
+    assert "cli-secret-key" not in result.output
+    assert "https://api.example.test/v1" in result.output
+    assert "https://stale.example.test/v1" not in result.output
+    assert '"reasoning_effort": "high"' in result.output
+    assert '"is_current"' not in result.output
+
+
+def test_provider_list_falls_back_to_endpoint_candidates(monkeypatch) -> None:
+    provider = Provider(
+        id="legacy-provider",
+        app=AppKind.CODEX,
+        name="Legacy provider",
+        settings_config={"config": "model_provider = ["},
+        endpoints=("https://candidate.example.test/v1",),
+        category="custom",
+        created_at=None,
+        notes=None,
+        is_current=False,
+    )
+
+    class Repository:
+        def list(self, apps):
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(main, ["providers", "list", "--json"])
+
+    assert result.exit_code == 0
+    assert "https://candidate.example.test/v1" in result.output
+
+
+def test_provider_add_does_not_echo_api_key(monkeypatch) -> None:
+    added = []
+
+    class Repository:
+        def add(self, provider):
+            added.append(provider)
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(
+        main,
+        [
+            "providers",
+            "add",
+            "codex",
+            "--name",
+            "Example Provider",
+            "--endpoint",
+            "https://api.example.test/v1",
+            "--api-key",
+            "add-secret-key",
+            "--model",
+            "example-model",
+            "--effort",
+            "high",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert len(added) == 1
+    assert added[0].app is AppKind.CODEX
+    assert "add-secret-key" not in result.output
+
+
+def test_provider_show_includes_unredacted_key_configuration(monkeypatch) -> None:
+    provider = _provider()
+
+    class Repository:
+        def find_by_name(self, name):
+            assert name == provider.name
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(main, ["providers", "show", provider.name])
+
+    assert result.exit_code == 0
+    assert "cli-secret-key" in result.output
+    assert "api_endpoint" in result.output
+    assert list(json.loads(result.output)[0]) == [
+        "api_endpoint",
+        "api_key",
+        "model",
+        "reasoning_effort",
+    ]
+
+
+def test_provider_delete_requires_confirmation() -> None:
+    result = CliRunner().invoke(main, ["providers", "delete", "claude", "example"])
+    assert result.exit_code != 0
+    assert "--yes" in result.output
+
+
+def test_provider_delete_uses_the_requested_app_and_id(monkeypatch) -> None:
+    deleted = []
+
+    class Repository:
+        def get_by_name(self, app, name):
+            assert app is AppKind.GROK
+            assert name == "Example Provider"
+            return Provider(
+                id="grok-provider-id",
+                app=app,
+                name=name,
+                settings_config={},
+                endpoints=(),
+                category="custom",
+                created_at=None,
+                notes=None,
+                is_current=False,
+            )
+
+        def delete(self, app, provider_id):
+            deleted.append((app, provider_id))
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(main, ["providers", "delete", "grok", "Example Provider", "--yes"])
+
+    assert result.exit_code == 0
+    assert deleted == [(AppKind.GROK, "grok-provider-id")]
