@@ -1,5 +1,5 @@
 # 供应商管理与 CLI 启动器
-最后修改时间: 2026-08-09 18:00:36
+最后修改时间: 2026-08-11 09:36:07
 
 流程模式: standard
 
@@ -20,7 +20,7 @@ Review status: Accepted
 1. 提供 Click 风格子命令的本地 CLI。首版命令面为 `providers list`、`providers add`、`providers show`、`providers delete` 和 `launch <claude|codex|grok>`。
 2. 从 cc-switch 数据库展示 `claude`、`codex`、`grokbuild` 供应商；列表显示应用、名称、实际 API endpoint、模型、推理强度和类别，绝不显示 API Key 或 ID。
 3. 新增自定义供应商时收集目标 CLI、名称、API endpoint、API Key、模型和可选推理强度；直接写入与 cc-switch 兼容的 `providers` 和 `provider_endpoints` 记录。
-4. 新增供应商默认生成最小无确认开发配置：在指定工作目录内读写文件、执行命令、访问网络均不再等待授权确认。
+4. 新增供应商默认生成无确认开发配置：策略值来自应用配置（`settings.yaml` 的 `apps.*`），写入供应商记录后，`launch` 以该记录实际配置为准。
 5. 支持按应用和名称删除唯一的自定义供应商；所有官方供应商均不可修改或删除。
 6. 启动器在调用原生交互式 CLI 时复用稳定状态目录，使同一 CLI 在供应商 A、B 间切换后仍能通过原生 `resume`/历史功能看到双方产生的会话。
 7. 首版只适配原生协议：Claude 使用 Anthropic Messages，Codex 和 Grok 使用 OpenAI Responses；不实现协议转换或本地代理。
@@ -87,8 +87,18 @@ ccs-plus launch <claude|codex|grok> --provider <name> [--cwd <path>] [--model <i
 - 自定义 endpoint 必须兼容 OpenAI Responses API；生成的 provider 使用 `wire_api = "responses"`。
 - 每个本应用管理的供应商在稳定 `CODEX_HOME` 旁创建一个受命名空间保护的 `<profile>.config.toml`。profile 内包含 `model_provider`、`model`、`model_reasoning_effort`（如有）及 `[model_providers.<id>]` 的 `base_url`、`wire_api`、`env_key`；API Key 通过启动器设置的唯一环境变量提供。
 - 使用 `--profile <profile>` 启动，保留基础 `config.toml` 和 `CODEX_HOME` 中的 `sessions`、SQLite state、认证及用户配置。
-- 新增 Codex 供应商时，直接在数据库 `settings_config.config` 的顶层写入 `approval_policy = "never"`、`sandbox_mode = "workspace-write"` 和 `[sandbox_workspace_write] network_access = true`，以兼容 cc-switch。Codex 0.147+ 启动 profile 则不得混用旧 sandbox 键：改为 `default_permissions = "ccs_plus_workspace_net"`，其 profile 继承 `:workspace`、开启网络并允许公网；同时显式写入/保留 `[windows] sandbox = "elevated"`，argv 仅使用 `--ask-for-approval never`。
-- 不使用 `--dangerously-bypass-approvals-and-sandbox`（`--yolo`），因为它会取消工作区文件边界。`workspace-write` 的目标是当前工作目录可写、命令和网络无确认；首次在未完成 Windows elevated sandbox 安装的机器上启动时，操作系统可能仍会请求一次管理员设置授权。
+- **新增/导入默认策略**（写入 cc-switch `settings_config.config` 顶层，兼容其 TOML 形态）来自 `settings.yaml` 的 `apps.codex`：
+  - 默认：`approval_policy: never`、`sandbox_mode: danger-full-access`
+  - 仅当配置的 `sandbox_mode` 为 `workspace-write` 时，才额外写入 `[sandbox_workspace_write] network_access = true`
+  - `providers add` 与 `providers import` 共用该默认源；导入不原样恢复备份中的旧 sandbox TOML，而是按当前应用配置重建记录
+- **启动以供应商实际配置为准**：从该记录的 `settings_config.config` 读取 `approval_policy` 与 `sandbox_mode`；缺失时启动失败，不回落到硬编码常量。
+- **运行时 managed profile**（Codex 0.147+ permission profile 语法）不得混用旧 sandbox 键：
+  - 写入 `approval_policy` = 供应商记录中的值
+  - 写入 `default_permissions` = `:<sandbox_mode>`（已是 `:` 前缀则原样使用）
+  - 不写入 `sandbox_mode`、`sandbox_workspace_write`、自定义 `[permissions]` 表或默认 `[windows] sandbox`
+  - 可保留既有 profile 中的 `[projects]` 可信状态
+  - argv 使用 `--ask-for-approval <approval_policy>`（来自供应商记录；官方供应商无配置时仍为 `never`）
+- 不使用 `--dangerously-bypass-approvals-and-sandbox`（`--yolo`）作为默认路径；全盘/无沙箱语义由供应商记录中的 `sandbox_mode`（默认 `danger-full-access`）表达。
 - 启动时不得继承供应商专属或临时的 `CODEX_HOME`；应使用配置的稳定 home，并清除冲突的 `CODEX_SQLITE_HOME`。本机已观察到父进程带有 cc-switch 临时 `CODEX_HOME`，这是必须处理的真实场景。
 
 ### Grok CLI
@@ -99,9 +109,21 @@ ccs-plus launch <claude|codex|grok> --provider <name> [--cwd <path>] [--model <i
 - 添加 `--sandbox workspace --always-approve`。`workspace` 允许 CWD 和 Grok 自身目录写入、允许子进程联网；`--always-approve` 自动通过全部工具执行确认。
 - 不使用供应商专属临时 `GROK_HOME`。Grok 会话存于 `<configured-grok-home>/sessions/<encoded-cwd>/`，state home 改变会直接隔离会话历史。
 
+## Application Configuration
+
+- 配置文件为项目根 `settings.yaml`（语义分组，不再使用 TOML 扁平键或 Dynaconf `default:` 环境层）。
+- 结构：
+  - `database.path`：cc-switch SQLite 路径
+  - `encryption_key`：通用 Fernet key（优先 `.env` 的 `CCS_PLUS_ENCRYPTION_KEY`）
+  - `apps.claude.home` / `apps.codex.home` / `apps.grok.home`：稳定 state home
+  - `apps.codex.approval_policy` / `apps.codex.sandbox_mode`：仅用于 **新增/导入** 时写入供应商记录的默认策略
+- 环境变量前缀 `CCS_PLUS_`，嵌套键用 `__`（例如 `CCS_PLUS_DATABASE__PATH`、`CCS_PLUS_APPS__CODEX__HOME`）。
+- 配置只读加载，不提供本应用写入或目录设置子命令。
+- **职责分离**：`apps.codex.*` 默认策略只影响 add/import；`launch` 只读数据库中该供应商的实际 `settings_config`。
+
 ## Session Persistence
 
-状态目录必须稳定，且三种 CLI 的 state home 只由 Dynaconf 配置提供，绝不从供应商或父进程临时环境推断。随附的默认 `settings.toml` 使用项目本地 `data/claude`、`data/codex`、`data/grok`；用户可在 `settings.toml`、`.env` 或环境变量中改为既有 home。状态目录配置不得按供应商变化。
+状态目录必须稳定，且三种 CLI 的 state home 只由应用配置提供，绝不从供应商或父进程临时环境推断。默认 `settings.yaml` 将 home 设为项目本地 `data/claude`、`data/codex`、`data/grok`；用户可在 `settings.yaml`、`.env` 或环境变量中改为既有 home。状态目录配置不得按供应商变化。
 
 | CLI | 原生会话位置 | 本应用的供应商切换策略 |
 | --- | --- | --- |
@@ -123,13 +145,14 @@ ccs-plus launch <claude|codex|grok> --provider <name> [--cwd <path>] [--model <i
 
 1. `uv run` 可在 Windows、macOS、Linux 上运行 Click CLI；`--help` 展示 provider 管理和三种启动子命令。
 2. 数据库列表正确展示 Claude、Codex、Grok Build 的实际配置 endpoint、模型和推理强度且不泄露 API Key 或 ID；官方项清晰标识且删除命令拒绝执行。
-3. 新增自定义供应商以一次事务写入 cc-switch 兼容记录及 endpoint；新增 Codex 记录在 `settings_config.config` 中持久化免确认、工作区写入和网络访问策略；错误不会留下半完成记录。
+3. 新增自定义供应商以一次事务写入 cc-switch 兼容记录及 endpoint；新增 Codex 记录在 `settings_config.config` 中持久化来自 `apps.codex` 的 `approval_policy` 与 `sandbox_mode`（默认 `never` / `danger-full-access`）；错误不会留下半完成记录。
 4. 删除精确作用于指定 `(id, app_type)` 和级联 endpoint，不影响其他应用同 ID、官方项、CLI 会话或工作目录文件。
 5. Claude 启动使用 Anthropic Messages 环境变量与 `--dangerously-skip-permissions`；不改变其稳定状态目录。
-6. Codex 生成的 profile 使用 `approval_policy = "never"` 与明确的 `default_permissions` 工作区网络 profile，且不混用 `sandbox_mode`/`sandbox_workspace_write`；启动时不出现 “Update Model Permissions” 选择器，不使用临时 `CODEX_HOME`。
+6. Codex managed profile 的 `approval_policy` / `default_permissions` 来自供应商实际配置，不混用旧 `sandbox_mode`/`sandbox_workspace_write`；argv 的 `--ask-for-approval` 同步供应商记录；启动时不出现 “Update Model Permissions” 选择器，不使用临时 `CODEX_HOME`。
 7. Grok 启动使用受管理的 `[model.<profile>]`、`--model <profile> --sandbox workspace --always-approve`；不修改 `[models].default` 或使用临时 `GROK_HOME`。
 8. 对每种 CLI，在同一工作目录用供应商 A 创建会话、再用供应商 B 启动后，原生恢复/历史入口仍能找到 A 的会话。
 9. CLI 不存在、配置解析失败、数据库锁定、状态目录不匹配或子进程启动失败时，错误不泄露 API Key，也不覆盖用户未管理的主配置。
+10. 应用配置为语义化 `settings.yaml`；add/import 与 launch 的策略职责分离如上。
 
 ## Evidence
 
@@ -142,7 +165,7 @@ ccs-plus launch <claude|codex|grok> --provider <name> [--cwd <path>] [--model <i
 ## Risks and Assumptions
 
 - 无确认权限只应面向可信工作目录和可信供应商。Claude 没有与 Codex/Grok 等价的工作区级 OS 沙箱。
-- Codex 的 `workspace-write` 有意保护工作目录中的 `.git`、`.codex` 等元数据。若任务必须写入这些受保护路径，不能在保留目录边界的同时满足，必须由用户明确改用 `danger-full-access` 或外层隔离环境。
+- 默认 Codex `sandbox_mode = danger-full-access` 取消工作区文件边界，只适用于可信工作目录；若需保留工作区边界，应在 `settings.yaml` 将 `apps.codex.sandbox_mode` 改为 `workspace-write` 后重新 add/import（既有记录需手动更新或重建）。
 - 供应商 endpoint 可接收 API Key、提示词和代码上下文；本应用只验证 URL、协议声明和 CLI 配置语法，不能验证供应商的安全性或完整协议兼容性。
 - 直接写 cc-switch 数据库会与正在运行的 cc-switch 竞争 SQLite 锁，必须重试有限次数并保留失败上下文。
 - Grok 的共享 `config.toml` 与 Codex 的 profile 由其他工具同时改动时，实施需要文件锁、原子写入、语法验证和 ownership 检查，避免覆盖用户配置。
@@ -163,3 +186,5 @@ ccs-plus launch <claude|codex|grok> --provider <name> [--cwd <path>] [--model <i
 - 2026-08-09：用户明确要求添加 Codex 供应商即在 cc-switch 数据库中持久化免确认配置；仅在 `launch` 临时传递参数或生成 profile 不足以满足该要求。
 - 2026-08-09：用户反馈重新添加后的 Codex 供应商仍重复要求选择 sandbox。确认原因是托管 profile 重建时丢失了 Codex 写回的 Windows sandbox 和项目可信状态；改为默认 `elevated` 并保留既有有效选择，网络开关同时以 CLI config 覆盖。
 - 2026-08-09：用户提供现场输出，确认旧 sandbox 参数已传入但 Codex 0.147.0 仍出现 “Update Model Permissions”。改为当前 permission profile 语法，避免同一运行时 profile 混用旧 sandbox 设置。
+- 2026-08-11：用户要求纠正实现——在应用配置中定义 Codex 默认 `approval_policy` / `sandbox_mode`（目标值为 `never` 与 `danger-full-access`），add/import 使用该值写入供应商记录；`launch` 以数据库中的供应商实际配置为准，不再在 managed profile / argv 中硬编码策略。
+- 2026-08-11：用户要求重组配置：不再使用 TOML 扁平翻译形态；采用语义化 `settings.yaml`（`database` / `encryption_key` / `apps`），并关闭 Dynaconf environment 层。

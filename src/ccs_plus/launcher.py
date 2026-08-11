@@ -112,9 +112,12 @@ def _codex_spec(
         profile = ensure_managed_config(runtime_provider, state_home, model, effort)
         env[profile.env_key] = _required(runtime_provider.api_key, "Codex API key")
         argv.extend(["--profile", profile.name])
+        approval_policy = _required(runtime_provider.approval_policy, "Codex approval_policy")
+    else:
+        approval_policy = "never"
     if model:
         argv.extend(["--model", model])
-    argv.extend(["--ask-for-approval", "never"])
+    argv.extend(["--ask-for-approval", approval_policy])
     return argv
 
 

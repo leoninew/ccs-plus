@@ -74,6 +74,14 @@ class NewProvider:
 
 
 @dataclass(frozen=True)
+class CodexAppConfig:
+    """Defaults used when creating Codex providers (add/import)."""
+
+    approval_policy: str
+    sandbox_mode: str
+
+
+@dataclass(frozen=True)
 class RuntimeProvider:
     provider: Provider
     endpoint: str | None
@@ -81,6 +89,8 @@ class RuntimeProvider:
     model: str | None
     effort: str | None
     claude_env: dict[str, str] = field(default_factory=dict)
+    approval_policy: str | None = None
+    sandbox_mode: str | None = None
 
 
 @dataclass(frozen=True)

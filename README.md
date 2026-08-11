@@ -13,7 +13,7 @@ uv run ccs-plus providers list
 
 ## 配置
 
-在 `settings.toml` 或 `.env` 中设置 cc-switch 数据库和三种 CLI state home。环境变量使用 `CCS_PLUS_` 前缀，完整示例见 `.env.example`。默认 state home 位于项目本地 `data/`，不会提交到 Git。
+配置文件为项目根 `settings.yaml`（语义分组：`database` / `encryption_key` / `apps`）。可用 `.env` 或 `CCS_PLUS_*` 环境变量覆盖，嵌套键用 `__`（如 `CCS_PLUS_APPS__CODEX__HOME`）。完整示例见 `.env.example`。默认 state home 在项目本地 `data/`，不提交到 Git。`providers add/import` 写入 `apps.codex` 默认策略；`launch` 以数据库中的供应商实际配置为准。
 
 ## 命令
 

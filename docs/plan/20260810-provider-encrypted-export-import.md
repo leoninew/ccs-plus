@@ -1,6 +1,6 @@
 # 加密供应商导入导出计划
 
-最后修改时间: 2026-08-10 16:00:32
+最后修改时间: 2026-08-11 09:36:07
 
 Review status: Accepted
 
@@ -12,20 +12,21 @@ Flow mode: standard / 标准模式
 
 ## Implementation Steps
 
-1. 在 `pyproject.toml` 添加 `cryptography`，由 `uv.lock` 锁定；在 `.env.example`、`settings.toml` 和 `AppSettings` 定义通用 `CCS_PLUS_ENCRYPTION_KEY`。
+1. 在 `pyproject.toml` 添加 `cryptography`，由 `uv.lock` 锁定；在 `.env.example`、语义化 `settings.yaml` 的 `encryption_key` 与 `AppSettings` 定义通用 `CCS_PLUS_ENCRYPTION_KEY`。
 2. `load_settings()` 使用 `cryptography.fernet.Fernet` 校验密钥，拒绝空值、示例值和非法编码，使所有依赖设置的正常命令在初始化时失败。
 3. 新建 `provider_transfer.py`：提取自定义供应商运行时 endpoint/API Key/model/effort，生成版本化 JSON；以 Fernet token 存储 API Key；解析时解密并构建、校验 `NewProvider`。
 4. 在 `cli.py` 增加 `providers export [output_path]`、`providers import <input_path>`；路径省略时在项目 `data/` 生成时间戳文件并创建该目录，导出通过独占创建避免覆盖，导入在完整解析后检查名称冲突。
-5. 为 `ProviderRepository` 增加 `add_many()`，在一次 SQLite `BEGIN IMMEDIATE` 事务中插入所有 provider 及 endpoint；`add()` 复用该实现。
-6. 删除 `scripts/provider_export.py` 及其独立测试，更新 README 命令和配置说明。
-7. 新增 `providers reset [--no-dry-run]`；默认仅列出非官方目标，确认后调用 repository 的单事务清理方法。
-8. 覆盖 Fernet round-trip、错误密钥、JSON 记录校验、CLI 默认文件名、导入前全量校验、批量写事务回滚、reset dry-run/执行路径和设置初始化校验。
+5. 导入写入路径调用 `build_provider(value, settings.codex.provider_defaults())`，与 `providers add` 共用 Codex 默认策略源。
+6. 为 `ProviderRepository` 增加 `add_many()`，在一次 SQLite `BEGIN IMMEDIATE` 事务中插入所有 provider 及 endpoint；`add()` 复用该实现。
+7. 删除 `scripts/provider_export.py` 及其独立测试，更新 README 命令和配置说明。
+8. 新增 `providers reset [--no-dry-run]`；默认仅列出非官方目标，确认后调用 repository 的单事务清理方法。
+9. 覆盖 Fernet round-trip、错误密钥、JSON 记录校验、CLI 默认文件名、导入前全量校验、批量写事务回滚、reset dry-run/执行路径和设置初始化校验。
 
 ## Files to Change
 
 - `pyproject.toml`、`uv.lock`
-- `.env.example`、`settings.toml`、`README.md`
-- `src/ccs_plus/settings.py`、`src/ccs_plus/provider_transfer.py`、`src/ccs_plus/cli.py`、`src/ccs_plus/database.py`
+- `.env.example`、`settings.yaml`、`README.md`
+- `src/ccs_plus/settings.py`、`src/ccs_plus/provider_transfer.py`、`src/ccs_plus/cli.py`、`src/ccs_plus/database.py`、`src/ccs_plus/adapters.py`
 - `tests/conftest.py`、`tests/test_settings.py`、`tests/test_provider_transfer.py`、`tests/test_cli.py`、`tests/test_database.py`
 - 删除 `scripts/provider_export.py`、`tests/test_provider_export.py`
 

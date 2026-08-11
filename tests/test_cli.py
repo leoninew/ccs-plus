@@ -5,12 +5,15 @@ import logging
 from dataclasses import replace
 
 from click.testing import CliRunner
+from conftest import make_app_settings
 
 from ccs_plus.adapters import build_provider
 from ccs_plus.cli import main
-from ccs_plus.domain import AppKind, NewProvider, Provider
+from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider
 from ccs_plus.launcher import LaunchSpec
 from ccs_plus.settings import AppSettings
+
+_CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
 
 
 def _provider():
@@ -23,8 +26,13 @@ def _provider():
             model="example-model",
             effort="high",
             notes=None,
-        )
+        ),
+        _CODEX,
     )
+
+
+def _settings(tmp_path, **overrides) -> AppSettings:
+    return make_app_settings(tmp_path, **overrides)
 
 
 def test_help_exposes_provider_and_launch_commands() -> None:
@@ -65,14 +73,7 @@ def test_launch_help_makes_cwd_optional() -> None:
 
 def test_launch_selects_provider_by_name(monkeypatch, tmp_path) -> None:
     provider = _provider()
-    settings = AppSettings(
-        project_root=tmp_path,
-        database_path=tmp_path / "cc-switch.db",
-        claude_home=tmp_path / "claude",
-        codex_home=tmp_path / "codex",
-        grok_home=tmp_path / "grok",
-        encryption_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-    )
+    settings = _settings(tmp_path)
     selected = []
 
     class Repository:
@@ -106,14 +107,7 @@ def test_launch_verbose_configures_logging_and_does_not_log_api_key(
     monkeypatch, tmp_path, caplog
 ) -> None:
     provider = _provider()
-    settings = AppSettings(
-        project_root=tmp_path,
-        database_path=tmp_path / "cc-switch.db",
-        claude_home=tmp_path / "claude",
-        codex_home=tmp_path / "codex",
-        grok_home=tmp_path / "grok",
-        encryption_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-    )
+    settings = _settings(tmp_path)
     logging_options = []
 
     class Repository:
@@ -193,13 +187,14 @@ def test_provider_list_falls_back_to_endpoint_candidates(monkeypatch) -> None:
     assert "https://candidate.example.test/v1" in result.output
 
 
-def test_provider_add_does_not_echo_api_key(monkeypatch) -> None:
+def test_provider_add_does_not_echo_api_key(monkeypatch, tmp_path) -> None:
     added = []
 
     class Repository:
         def add(self, provider):
             added.append(provider)
 
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: _settings(tmp_path))
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
     result = CliRunner().invoke(
         main,
@@ -224,18 +219,14 @@ def test_provider_add_does_not_echo_api_key(monkeypatch) -> None:
     assert len(added) == 1
     assert added[0].app is AppKind.CODEX
     assert "add-secret-key" not in result.output
+    config = added[0].settings_config["config"]
+    assert 'sandbox_mode = "danger-full-access"' in config
+    assert 'approval_policy = "never"' in config
 
 
 def test_provider_export_writes_default_encrypted_backup(monkeypatch, tmp_path) -> None:
     provider = _provider()
-    settings = AppSettings(
-        project_root=tmp_path,
-        database_path=tmp_path / "cc-switch.db",
-        claude_home=tmp_path / "claude",
-        codex_home=tmp_path / "codex",
-        grok_home=tmp_path / "grok",
-        encryption_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-    )
+    settings = _settings(tmp_path)
 
     class Repository:
         def list(self):
@@ -271,6 +262,7 @@ def test_provider_import_validates_before_writing(monkeypatch, tmp_path) -> None
         def add_many(self, providers):
             added.extend(providers)
 
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: _settings(tmp_path))
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
     monkeypatch.setattr(
         "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
@@ -302,6 +294,7 @@ def test_provider_import_adds_all_validated_providers(monkeypatch, tmp_path) -> 
         def add_many(self, providers):
             added.extend(providers)
 
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: _settings(tmp_path))
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
     monkeypatch.setattr(
         "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="

@@ -8,26 +8,45 @@ from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 from dynaconf import Dynaconf
 
-from ccs_plus.domain import ProviderError
+from ccs_plus.domain import CodexAppConfig, ProviderError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ENCRYPTION_KEY_EXAMPLE = "replace-with-a-fernet-key"
+SETTINGS_FILE = "settings.yaml"
+
+
+@dataclass(frozen=True)
+class AppHomeSettings:
+    home: Path
+
+
+@dataclass(frozen=True)
+class CodexSettings:
+    home: Path
+    approval_policy: str
+    sandbox_mode: str
+
+    def provider_defaults(self) -> CodexAppConfig:
+        return CodexAppConfig(
+            approval_policy=self.approval_policy,
+            sandbox_mode=self.sandbox_mode,
+        )
 
 
 @dataclass(frozen=True)
 class AppSettings:
     project_root: Path
     database_path: Path
-    claude_home: Path
-    codex_home: Path
-    grok_home: Path
     encryption_key: str
+    claude: AppHomeSettings
+    codex: CodexSettings
+    grok: AppHomeSettings
 
     def state_home(self, app: str) -> Path:
         values = {
-            "claude": self.claude_home,
-            "codex": self.codex_home,
-            "grok": self.grok_home,
+            "claude": self.claude.home,
+            "codex": self.codex.home,
+            "grok": self.grok.home,
         }
         try:
             return values[app]
@@ -54,24 +73,51 @@ def _resolve_encryption_key(value: object, key: str) -> str:
     return value
 
 
+def _resolve_non_empty_string(value: object, key: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ProviderError(f"Configuration {key} must be a non-empty string.")
+    return value.strip()
+
+
+def _get(config: Dynaconf, key: str) -> object:
+    return config.get(key)
+
+
 def load_settings(project_root: Path | None = None) -> AppSettings:
     root = (project_root or PROJECT_ROOT).resolve()
     load_dotenv(root / ".env", override=False)
+    settings_path = root / SETTINGS_FILE
+    if not settings_path.is_file():
+        raise ProviderError(f"Configuration file is missing: {settings_path}")
     config = Dynaconf(
         envvar_prefix="CCS_PLUS",
-        settings_files=[str(root / "settings.toml")],
-        # The checked-in settings file uses Dynaconf's [default] environment.
-        # Restricting settings_files also keeps .secrets.toml out of the load path.
-        environments=True,
+        settings_files=[str(settings_path)],
+        # No Dynaconf environment layer — YAML is the source schema.
+        # Restricting settings_files keeps .secrets.* out of the load path.
+        environments=False,
         merge_enabled=True,
     )
     return AppSettings(
         project_root=root,
-        database_path=_resolve_path(root, config.get("DATABASE_PATH"), "DATABASE_PATH"),
-        claude_home=_resolve_path(root, config.get("CLAUDE_HOME"), "CLAUDE_HOME"),
-        codex_home=_resolve_path(root, config.get("CODEX_HOME"), "CODEX_HOME"),
-        grok_home=_resolve_path(root, config.get("GROK_HOME"), "GROK_HOME"),
-        encryption_key=_resolve_encryption_key(config.get("ENCRYPTION_KEY"), "ENCRYPTION_KEY"),
+        database_path=_resolve_path(root, _get(config, "database.path"), "database.path"),
+        encryption_key=_resolve_encryption_key(_get(config, "encryption_key"), "encryption_key"),
+        claude=AppHomeSettings(
+            home=_resolve_path(root, _get(config, "apps.claude.home"), "apps.claude.home"),
+        ),
+        codex=CodexSettings(
+            home=_resolve_path(root, _get(config, "apps.codex.home"), "apps.codex.home"),
+            approval_policy=_resolve_non_empty_string(
+                _get(config, "apps.codex.approval_policy"),
+                "apps.codex.approval_policy",
+            ),
+            sandbox_mode=_resolve_non_empty_string(
+                _get(config, "apps.codex.sandbox_mode"),
+                "apps.codex.sandbox_mode",
+            ),
+        ),
+        grok=AppHomeSettings(
+            home=_resolve_path(root, _get(config, "apps.grok.home"), "apps.grok.home"),
+        ),
     )
 
 

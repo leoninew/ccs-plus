@@ -1,6 +1,6 @@
 # 加密供应商导入导出
 
-最后修改时间: 2026-08-10 16:00:32
+最后修改时间: 2026-08-11 09:36:07
 
 Review status: Accepted
 
@@ -14,7 +14,7 @@ Flow mode: standard / 标准模式
 
 - 新增 `ccs-plus providers export [file]` 与 `ccs-plus providers import <file>`。
 - 导出自定义供应商为 JSON；API Key 使用 Fernet 加密，不能以明文出现在备份文件。
-- 加密统一使用 `CCS_PLUS_ENCRYPTION_KEY`，而非导入导出专用密码；配置加载时立即校验它是有效 Fernet key。
+- 加密统一使用 `CCS_PLUS_ENCRYPTION_KEY`（对应 `settings.yaml` 的 `encryption_key`），而非导入导出专用密码；配置加载时立即校验它是有效 Fernet key。
 - 导入完整解析、解密并校验所有记录后，以单一数据库事务写入。
 - 省略导出路径时在项目 `data/` 目录创建 `providers-YYYYMMDD-HHMMSS.json`。
 - 移除旧的 `scripts/provider_export.py` 命令导出脚本。
@@ -37,10 +37,11 @@ Flow mode: standard / 标准模式
 ## Acceptance
 
 - `providers add` 行为保持不变；新增 export/import 均支持 `-h` 与 `--help`。
-- `.env.example` 说明各配置用途并给出 Fernet key 的 Python 生成命令，`.env` 被 Git 忽略；应用启动加载配置时拒绝缺失、占位或非法 Fernet key。
+- `.env.example` 说明各配置用途并给出 Fernet key 的 Python 生成命令，`.env` 被 Git 忽略；应用启动加载 `settings.yaml` 时拒绝缺失、占位或非法 Fernet key。
 - JSON 含稳定的 `format: "ccs-plus.providers"`、`version: 1`、`encryption.algorithm: "Fernet"` 与供应商列表；每项只保存导入所需字段，`api_key` 为 Fernet token。
 - 导出跳过官方供应商；不可解析的自定义供应商报错，不静默遗漏。
 - 导入在写入前验证 JSON 结构、版本、Fernet token、应用类型、名称、endpoint、API Key、模型、effort 及重名冲突。
+- 导入重建记录时使用当前 `apps.codex` 默认策略（与 `providers add` 相同），不回放备份中的旧 Codex sandbox TOML。
 - 批量写入具备数据库事务原子性；任一写入冲突时不保留部分导入。
 - reset 默认不修改数据库，`--no-dry-run` 在一个事务中删除所有非官方供应商及外键 endpoint，官方供应商不受影响。
 - `make check`、`make test` 和本地配置加载通过。
@@ -53,6 +54,7 @@ Flow mode: standard / 标准模式
 
 - 使用单个通用 `CCS_PLUS_ENCRYPTION_KEY` 直接构造 Fernet，而不使用交互式口令、KDF 或备份文件内的 salt。
 - 导出文件只包含自定义供应商的规范化导入数据，导入时重新生成 provider ID。
+- 导入经 `build_provider` 重建 cc-switch `settings_config`，Codex 权限字段取自当前应用配置而非备份原文。
 - 以 `(app, casefold(name))` 检查导入文件内及目标数据库中的重名，拒绝重复导入而非猜测覆盖策略。
 - `--no-dry-run` 作为 reset 的显式破坏性确认；不增加第二个交互确认。
 

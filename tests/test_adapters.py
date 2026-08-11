@@ -4,7 +4,9 @@ import pytest
 import tomlkit
 
 from ccs_plus.adapters import build_provider, display_configuration, runtime_from_provider
-from ccs_plus.domain import AppKind, NewProvider, Provider, ProviderError
+from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider, ProviderError
+
+_CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
 
 
 def _new_value(app: AppKind, effort: str | None = None) -> NewProvider:
@@ -20,28 +22,39 @@ def _new_value(app: AppKind, effort: str | None = None) -> NewProvider:
 
 
 def test_build_claude_provider_keeps_effort_in_cc_switch_shape() -> None:
-    provider = build_provider(_new_value(AppKind.CLAUDE, "high"))
+    provider = build_provider(_new_value(AppKind.CLAUDE, "high"), _CODEX)
     assert provider.settings_config["effortLevel"] == "high"
     assert provider.settings_config["env"]["ANTHROPIC_AUTH_TOKEN"] == "test-secret-key"
     assert runtime_from_provider(provider).effort == "high"
 
 
-def test_build_codex_provider_uses_responses_api() -> None:
-    provider = build_provider(_new_value(AppKind.CODEX, "xhigh"))
+def test_build_codex_provider_uses_responses_api_and_app_defaults() -> None:
+    provider = build_provider(_new_value(AppKind.CODEX, "xhigh"), _CODEX)
     document = tomlkit.parse(provider.settings_config["config"])
     assert document["model_provider"] == "custom"
     assert document["model_providers"]["custom"]["wire_api"] == "responses"
     assert document["approval_policy"] == "never"
-    assert document["sandbox_mode"] == "workspace-write"
-    assert document["sandbox_workspace_write"]["network_access"] is True
+    assert document["sandbox_mode"] == "danger-full-access"
+    assert "sandbox_workspace_write" not in document
     runtime = runtime_from_provider(provider)
     assert runtime.endpoint == "https://api.example.test/v1"
     assert runtime.api_key == "test-secret-key"
     assert runtime.effort == "xhigh"
+    assert runtime.approval_policy == "never"
+    assert runtime.sandbox_mode == "danger-full-access"
+
+
+def test_build_codex_provider_honors_configured_sandbox_mode() -> None:
+    codex = CodexAppConfig(approval_policy="on-request", sandbox_mode="workspace-write")
+    provider = build_provider(_new_value(AppKind.CODEX), codex)
+    document = tomlkit.parse(provider.settings_config["config"])
+    assert document["approval_policy"] == "on-request"
+    assert document["sandbox_mode"] == "workspace-write"
+    assert document["sandbox_workspace_write"]["network_access"] is True
 
 
 def test_build_grok_provider_uses_cc_switch_required_fields() -> None:
-    provider = build_provider(_new_value(AppKind.GROK, "xhigh"))
+    provider = build_provider(_new_value(AppKind.GROK, "xhigh"), _CODEX)
     document = tomlkit.parse(provider.settings_config["config"])
     model = document["model"]["example-model"]
     assert document["models"]["default"] == "example-model"
@@ -64,6 +77,8 @@ def test_runtime_uses_only_declared_env_key(monkeypatch) -> None:
             "config": """
 model_provider = "custom"
 model = "example-model"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
 [model_providers.custom]
 base_url = "https://api.example.test/v1"
 wire_api = "responses"
@@ -76,11 +91,14 @@ env_key = "DECLARED_PROVIDER_KEY"
         notes=None,
         is_current=False,
     )
-    assert runtime_from_provider(provider).api_key == "from-environment"
+    runtime = runtime_from_provider(provider)
+    assert runtime.api_key == "from-environment"
+    assert runtime.approval_policy == "never"
+    assert runtime.sandbox_mode == "danger-full-access"
 
 
 def test_runtime_rejects_non_responses_codex_provider() -> None:
-    provider = build_provider(_new_value(AppKind.CODEX))
+    provider = build_provider(_new_value(AppKind.CODEX), _CODEX)
     provider = Provider(
         **{
             **provider.__dict__,
@@ -101,7 +119,7 @@ wire_api = "chat"
 
 @pytest.mark.parametrize("app", list(AppKind))
 def test_display_configuration_uses_the_active_settings_config_route(app: AppKind) -> None:
-    provider = build_provider(_new_value(app))
+    provider = build_provider(_new_value(app), _CODEX)
     provider = Provider(**{**provider.__dict__, "endpoints": ("https://stale.example.test/v1",)})
 
     display = display_configuration(provider)

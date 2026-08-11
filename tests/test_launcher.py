@@ -4,22 +4,18 @@ import logging
 from pathlib import Path
 
 import pytest
+from conftest import make_app_settings
 
 from ccs_plus.adapters import build_provider
-from ccs_plus.domain import AppKind, NewProvider, Provider, ProviderError
+from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider, ProviderError
 from ccs_plus.launcher import LaunchSpec, build_launch_spec, launch
 from ccs_plus.settings import AppSettings
 
+_CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
+
 
 def _settings(root: Path) -> AppSettings:
-    return AppSettings(
-        project_root=root,
-        database_path=root / "cc-switch.db",
-        claude_home=root / "claude",
-        codex_home=root / "codex",
-        grok_home=root / "grok",
-        encryption_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-    )
+    return make_app_settings(root)
 
 
 def _provider(app: AppKind):
@@ -32,7 +28,8 @@ def _provider(app: AppKind):
             model="example-model",
             effort="high" if app is not AppKind.GROK else "xhigh",
             notes=None,
-        )
+        ),
+        _CODEX,
     )
 
 
@@ -75,12 +72,39 @@ def test_launch_specs_keep_secret_out_of_argv_and_use_stable_home(
         assert "--dangerously-bypass-approvals-and-sandbox" not in spec.argv
 
 
+def test_codex_launch_uses_provider_approval_policy(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+    provider = build_provider(
+        NewProvider(
+            app=AppKind.CODEX,
+            name="On Request",
+            endpoint="https://api.example.test/v1",
+            api_key="launch-secret-key",
+            model="example-model",
+            effort=None,
+            notes=None,
+        ),
+        CodexAppConfig(approval_policy="on-request", sandbox_mode="workspace-write"),
+    )
+    spec = build_launch_spec(provider, _settings(tmp_path), tmp_path)
+    assert (
+        spec.argv[spec.argv.index("--ask-for-approval")],
+        spec.argv[spec.argv.index("--ask-for-approval") + 1],
+    ) == ("--ask-for-approval", "on-request")
+    profile_name = spec.argv[spec.argv.index("--profile") + 1]
+    profile_text = (_settings(tmp_path).codex.home / f"{profile_name}.config.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'approval_policy = "on-request"' in profile_text
+    assert 'default_permissions = ":workspace-write"' in profile_text
+
+
 def test_codex_launch_profile_contains_no_api_key(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
     spec = build_launch_spec(_provider(AppKind.CODEX), _settings(tmp_path), tmp_path)
 
     profile_name = spec.argv[spec.argv.index("--profile") + 1]
-    profile = _settings(tmp_path).codex_home / f"{profile_name}.config.toml"
+    profile = _settings(tmp_path).codex.home / f"{profile_name}.config.toml"
     assert "launch-secret-key" not in profile.read_text(encoding="utf-8")
     assert any(key.startswith("CCS_PLUS_CODEX_") for key in spec.env)
 
@@ -106,7 +130,7 @@ def test_launch_model_and_effort_overrides_are_transient(tmp_path, monkeypatch) 
     )
 
     profile_name = spec.argv[spec.argv.index("--profile") + 1]
-    profile = _settings(tmp_path).codex_home / f"{profile_name}.config.toml"
+    profile = _settings(tmp_path).codex.home / f"{profile_name}.config.toml"
     profile_text = profile.read_text(encoding="utf-8")
     assert 'model = "override-model"' in profile_text
     assert 'model_reasoning_effort = "minimal"' in profile_text

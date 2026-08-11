@@ -11,6 +11,7 @@ from tomlkit import TOMLDocument
 
 from ccs_plus.domain import (
     AppKind,
+    CodexAppConfig,
     NewProvider,
     Provider,
     ProviderDisplay,
@@ -19,13 +20,13 @@ from ccs_plus.domain import (
 )
 
 
-def build_provider(value: NewProvider) -> Provider:
+def build_provider(value: NewProvider, codex: CodexAppConfig) -> Provider:
     created_at = int(time.time() * 1000)
     provider_id = f"ccs-plus-{uuid.uuid4().hex}"
     if value.app is AppKind.CLAUDE:
         settings = _new_claude_settings(value)
     elif value.app is AppKind.CODEX:
-        settings = _new_codex_settings(value)
+        settings = _new_codex_settings(value, codex)
     else:
         settings = _new_grok_settings(value)
     return Provider(
@@ -88,14 +89,14 @@ def _new_claude_settings(value: NewProvider) -> dict[str, Any]:
     return settings
 
 
-def _new_codex_settings(value: NewProvider) -> dict[str, Any]:
+def _new_codex_settings(value: NewProvider, codex: CodexAppConfig) -> dict[str, Any]:
     document = tomlkit.document()
     document["model_provider"] = "custom"
     document["model"] = value.model.strip()
     if value.effort:
         document["model_reasoning_effort"] = value.effort
-    document["approval_policy"] = "never"
-    document["sandbox_mode"] = "workspace-write"
+    document["approval_policy"] = codex.approval_policy
+    document["sandbox_mode"] = codex.sandbox_mode
     providers = tomlkit.table()
     custom = tomlkit.table()
     custom["name"] = value.name.strip()
@@ -103,9 +104,10 @@ def _new_codex_settings(value: NewProvider) -> dict[str, Any]:
     custom["wire_api"] = "responses"
     providers["custom"] = custom
     document["model_providers"] = providers
-    workspace = tomlkit.table()
-    workspace["network_access"] = True
-    document["sandbox_workspace_write"] = workspace
+    if codex.sandbox_mode == "workspace-write":
+        workspace = tomlkit.table()
+        workspace["network_access"] = True
+        document["sandbox_workspace_write"] = workspace
     return {
         "auth": {"OPENAI_API_KEY": value.api_key},
         "config": tomlkit.dumps(document),
@@ -189,6 +191,8 @@ def _codex_runtime(provider: Provider) -> RuntimeProvider:
         api_key=api_key,
         model=_as_string(_value(document.get("model"))),
         effort=_as_string(_value(document.get("model_reasoning_effort"))),
+        approval_policy=_as_string(_value(document.get("approval_policy"))),
+        sandbox_mode=_as_string(_value(document.get("sandbox_mode"))),
     )
 
 

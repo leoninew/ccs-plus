@@ -5,6 +5,9 @@ from pathlib import Path
 
 import pytest
 
+from ccs_plus.domain import CodexAppConfig
+from ccs_plus.settings import AppHomeSettings, AppSettings, CodexSettings
+
 
 @pytest.fixture()
 def database_path(tmp_path: Path) -> Path:
@@ -49,18 +52,56 @@ def database_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture()
+def codex_app_config() -> CodexAppConfig:
+    return CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
+
+
+def make_app_settings(
+    root: Path,
+    *,
+    database_path: Path | None = None,
+    encryption_key: str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    approval_policy: str = "never",
+    sandbox_mode: str = "danger-full-access",
+) -> AppSettings:
+    return AppSettings(
+        project_root=root,
+        database_path=database_path or (root / "cc-switch.db"),
+        encryption_key=encryption_key,
+        claude=AppHomeSettings(home=root / "claude"),
+        codex=CodexSettings(
+            home=root / "codex",
+            approval_policy=approval_policy,
+            sandbox_mode=sandbox_mode,
+        ),
+        grok=AppHomeSettings(home=root / "grok"),
+    )
+
+
+@pytest.fixture()
+def app_settings():
+    return make_app_settings
+
+
+@pytest.fixture()
 def settings_root(tmp_path: Path, database_path: Path) -> Path:
     root = tmp_path / "app"
     root.mkdir()
-    (root / "settings.toml").write_text(
+    (root / "settings.yaml").write_text(
         "\n".join(
             [
-                "[default]",
-                f'database_path = "{database_path.as_posix()}"',
-                'claude_home = "data/claude"',
-                'codex_home = "data/codex"',
-                'grok_home = "data/grok"',
-                'encryption_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="',
+                "database:",
+                f'  path: "{database_path.as_posix()}"',
+                'encryption_key: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="',
+                "apps:",
+                "  claude:",
+                "    home: data/claude",
+                "  codex:",
+                "    home: data/codex",
+                "    approval_policy: never",
+                "    sandbox_mode: danger-full-access",
+                "  grok:",
+                "    home: data/grok",
                 "",
             ]
         ),

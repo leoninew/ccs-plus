@@ -6,7 +6,9 @@ import pytest
 
 from ccs_plus.adapters import build_provider
 from ccs_plus.database import ProviderRepository
-from ccs_plus.domain import AppKind, NewProvider, ProviderError
+from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, ProviderError
+
+_CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
 
 
 def _new_provider(app: AppKind = AppKind.CODEX):
@@ -19,7 +21,8 @@ def _new_provider(app: AppKind = AppKind.CODEX):
             model="example-model",
             effort="high" if app is AppKind.CODEX else None,
             notes="test provider",
-        )
+        ),
+        _CODEX,
     )
 
 

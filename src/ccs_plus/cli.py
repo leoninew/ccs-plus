@@ -95,7 +95,7 @@ def add_provider(
             notes=notes,
         )
         validate_new_provider(value)
-        provider = build_provider(value)
+        provider = build_provider(value, _settings().codex.provider_defaults())
         _repository().add(provider)
         click.echo(f"Added {provider.app.value} provider {provider.id}.")
     except ProviderError as exc:
@@ -126,7 +126,8 @@ def import_providers(input_path: Path) -> None:
         values = parse_backup_document(document, _encryption_key())
         repository = _repository()
         _validate_import_names(values, repository.list())
-        repository.add_many(build_provider(value) for value in values)
+        codex = _settings().codex.provider_defaults()
+        repository.add_many(build_provider(value, codex) for value in values)
         click.echo(f"Imported {len(values)} custom providers from {input_path}.")
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc

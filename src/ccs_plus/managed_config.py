@@ -15,8 +15,6 @@ from tomlkit import TOMLDocument
 
 from ccs_plus.domain import AppKind, ProviderError, RuntimeProvider
 
-_CODEX_PERMISSION_PROFILE = ":danger-full-access"
-
 
 @dataclass(frozen=True)
 class ManagedProfile:
@@ -47,6 +45,8 @@ def _ensure_codex_profile(
     env_key = _managed_env_key(runtime, "CODEX")
     path = state_home / f"{profile}.config.toml"
     marker = _marker(runtime)
+    approval_policy = _required(runtime.approval_policy, "Codex approval_policy")
+    sandbox_mode = _required(runtime.sandbox_mode, "Codex sandbox_mode")
     with _locked(path):
         content = path.read_text(encoding="utf-8") if path.exists() else ""
         if content and marker not in content:
@@ -60,8 +60,10 @@ def _ensure_codex_profile(
             document["model"] = model
         if effort:
             document["model_reasoning_effort"] = effort
-        document["approval_policy"] = "never"
-        document["default_permissions"] = _CODEX_PERMISSION_PROFILE
+        document["approval_policy"] = approval_policy
+        # Codex permission profiles do not compose with legacy sandbox keys.
+        # Map the provider's sandbox_mode onto the built-in permission profile.
+        document["default_permissions"] = _permission_profile(sandbox_mode)
 
         if existing is not None:
             projects = existing.get("projects")
@@ -79,6 +81,12 @@ def _ensure_codex_profile(
 
         _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
     return ManagedProfile(name=profile, env_key=env_key)
+
+
+def _permission_profile(sandbox_mode: str) -> str:
+    if sandbox_mode.startswith(":"):
+        return sandbox_mode
+    return f":{sandbox_mode}"
 
 
 def _parse_codex_profile(content: str, path: Path) -> TOMLDocument:

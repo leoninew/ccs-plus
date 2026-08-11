@@ -1,0 +1,25 @@
+# ccs-plus configuration
+#
+# Environment overrides use CCS_PLUS_ and nested __ separators, e.g.:
+#   CCS_PLUS_DATABASE__PATH
+#   CCS_PLUS_APPS__CODEX__HOME
+#   CCS_PLUS_ENCRYPTION_KEY
+
+# cc-switch SQLite database. ~ expands on Windows, macOS, and Linux.
+database:
+  path: "~/.cc-switch/cc-switch.db"
+
+# Fernet key for providers export/import. Prefer setting via .env.
+encryption_key: ""
+
+# Per-app runtime homes and defaults for newly added providers.
+# launch always uses the provider record stored in the database.
+apps:
+  claude:
+    home: data/claude
+  codex:
+    home: data/codex
+    approval_policy: never
+    sandbox_mode: danger-full-access
+  grok:
+    home: data/grok
