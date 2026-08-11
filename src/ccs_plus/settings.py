@@ -18,11 +18,13 @@ SETTINGS_FILE = "settings.yaml"
 @dataclass(frozen=True)
 class AppHomeSettings:
     home: Path
+    user_home: Path | None = None
 
 
 @dataclass(frozen=True)
 class CodexSettings:
     home: Path
+    user_home: Path
     approval_policy: str
     sandbox_mode: str
 
@@ -59,6 +61,22 @@ def _resolve_path(root: Path, value: object, key: str) -> Path:
         raise ProviderError(f"Configuration {key} must be a non-empty path.")
     candidate = Path(value).expanduser()
     return candidate if candidate.is_absolute() else (root / candidate).resolve()
+
+
+def _default_user_home(name: str) -> Path:
+    """Built-in real CLI home: ``Path.home() / name`` (e.g. ``.claude``, ``.codex``)."""
+    return Path.home() / name
+
+
+def _resolve_optional_user_home(root: Path, value: object, key: str, default_name: str) -> Path:
+    """Optional override for real user home.
+
+    When the key is absent or blank, use ``Path.home() / default_name``.
+    Only an explicitly provided non-empty value overrides that default.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return _default_user_home(default_name)
+    return _resolve_path(root, value, key)
 
 
 def _resolve_encryption_key(value: object, key: str) -> str:
@@ -103,9 +121,21 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
         encryption_key=_resolve_encryption_key(_get(config, "encryption_key"), "encryption_key"),
         claude=AppHomeSettings(
             home=_resolve_path(root, _get(config, "apps.claude.home"), "apps.claude.home"),
+            user_home=_resolve_optional_user_home(
+                root,
+                _get(config, "apps.claude.user_home"),
+                "apps.claude.user_home",
+                ".claude",
+            ),
         ),
         codex=CodexSettings(
             home=_resolve_path(root, _get(config, "apps.codex.home"), "apps.codex.home"),
+            user_home=_resolve_optional_user_home(
+                root,
+                _get(config, "apps.codex.user_home"),
+                "apps.codex.user_home",
+                ".codex",
+            ),
             approval_policy=_resolve_non_empty_string(
                 _get(config, "apps.codex.approval_policy"),
                 "apps.codex.approval_policy",

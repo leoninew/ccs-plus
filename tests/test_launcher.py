@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -184,6 +185,100 @@ def test_launch_returns_child_exit_code(monkeypatch, tmp_path) -> None:
     spec = LaunchSpec(argv=("native-cli",), cwd=tmp_path, env={})
     assert launch(spec) == 7
     assert captured["kwargs"] == {"cwd": tmp_path, "env": {}, "check": False}
+
+
+def test_codex_launch_links_skills_and_merges_user_config(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+    user_home = tmp_path / "user-codex"
+    (user_home / "skills" / "pomelo-db").mkdir(parents=True)
+    (user_home / "skills" / ".system").mkdir()
+    (user_home / "plugins" / "cache").mkdir(parents=True)
+    (user_home / "config.toml").write_text(
+        """
+[mcp_servers.mks-ttyd]
+command = "mks-ttyd"
+""",
+        encoding="utf-8",
+    )
+    settings = make_app_settings(tmp_path, codex_user_home=user_home)
+
+    spec = build_launch_spec(_provider(AppKind.CODEX), settings, tmp_path)
+
+    skills = settings.codex.home / "skills"
+    assert (skills / "pomelo-db").exists()
+    assert not (skills / ".system").exists()
+    assert (settings.codex.home / "plugins" / "cache").exists()
+    profile_name = spec.argv[spec.argv.index("--profile") + 1]
+    profile_text = (settings.codex.home / f"{profile_name}.config.toml").read_text(encoding="utf-8")
+    assert "mks-ttyd" in profile_text
+
+
+def test_codex_direct_launch_links_without_writing_config(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+    user_home = tmp_path / "user-codex"
+    (user_home / "skills" / "specflow").mkdir(parents=True)
+    (user_home / "config.toml").write_text(
+        """
+[mcp_servers.mks-ttyd]
+command = "mks-ttyd"
+""",
+        encoding="utf-8",
+    )
+    settings = make_app_settings(tmp_path, codex_user_home=user_home)
+    official = Provider(
+        id="codex-official",
+        app=AppKind.CODEX,
+        name="Codex official",
+        settings_config={},
+        endpoints=(),
+        category="official",
+        created_at=None,
+        notes=None,
+        is_current=False,
+    )
+
+    build_launch_spec(official, settings, tmp_path)
+
+    assert (settings.codex.home / "skills" / "specflow").exists()
+    assert not (settings.codex.home / "config.toml").exists()
+    assert not list(settings.codex.home.glob("ccs-plus-codex-*.config.toml"))
+
+
+def test_claude_launch_links_and_syncs_mcp(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-claude")
+    user_home = tmp_path / "user-claude"
+    (user_home / "skills" / "housekeeper").mkdir(parents=True)
+    (user_home / "plugins" / "marketplaces").mkdir(parents=True)
+    source = tmp_path / "user.claude.json"
+    source.write_text(
+        json.dumps({"mcpServers": {"demo": {"command": "demo"}}}),
+        encoding="utf-8",
+    )
+    settings = make_app_settings(tmp_path, claude_user_home=user_home)
+    monkeypatch.setattr(
+        "ccs_plus.home_visibility.Path.home",
+        classmethod(lambda cls: tmp_path),
+    )
+    # sync reads Path.home() / ".claude.json"; place source there.
+    (tmp_path / ".claude.json").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+
+    build_launch_spec(_provider(AppKind.CLAUDE), settings, tmp_path)
+
+    assert (settings.claude.home / "skills" / "housekeeper").exists()
+    assert (settings.claude.home / "plugins" / "marketplaces").exists()
+    document = json.loads((settings.claude.home / ".claude.json").read_text(encoding="utf-8"))
+    assert document["mcpServers"]["demo"]["command"] == "demo"
+
+
+def test_grok_launch_does_not_link_user_skills(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-grok")
+    user_like = tmp_path / "user-grok" / "skills" / "x"
+    user_like.mkdir(parents=True)
+    settings = make_app_settings(tmp_path)
+
+    build_launch_spec(_provider(AppKind.GROK), settings, tmp_path)
+
+    assert not (settings.grok.home / "skills").exists()
 
 
 def test_launch_logs_argv_and_exit_code_without_environment(monkeypatch, tmp_path, caplog) -> None:

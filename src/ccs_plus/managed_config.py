@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import tempfile
@@ -15,6 +16,15 @@ from tomlkit import TOMLDocument
 
 from ccs_plus.domain import AppKind, ProviderError, RuntimeProvider
 
+logger = logging.getLogger(__name__)
+
+CODEX_USER_CONFIG_TABLES = (
+    "mcp_servers",
+    "plugins",
+    "marketplaces",
+    "shell_environment_policy",
+)
+
 
 @dataclass(frozen=True)
 class ManagedProfile:
@@ -27,9 +37,11 @@ def ensure_managed_config(
     state_home: Path,
     model: str | None,
     effort: str | None,
+    *,
+    user_home: Path | None = None,
 ) -> ManagedProfile:
     if runtime.provider.app is AppKind.CODEX:
-        return _ensure_codex_profile(runtime, state_home, model, effort)
+        return _ensure_codex_profile(runtime, state_home, model, effort, user_home=user_home)
     if runtime.provider.app is AppKind.GROK:
         return _ensure_grok_model(runtime, state_home, model)
     raise ProviderError("Claude does not need a persistent managed configuration.")
@@ -40,6 +52,8 @@ def _ensure_codex_profile(
     state_home: Path,
     model: str | None,
     effort: str | None,
+    *,
+    user_home: Path | None = None,
 ) -> ManagedProfile:
     profile = _managed_name(runtime, "codex")
     env_key = _managed_env_key(runtime, "CODEX")
@@ -79,8 +93,30 @@ def _ensure_codex_profile(
         providers[profile] = provider
         document["model_providers"] = providers
 
+        if user_home is not None:
+            _merge_codex_user_tables(document, user_home)
+
         _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
     return ManagedProfile(name=profile, env_key=env_key)
+
+
+def _merge_codex_user_tables(document: TOMLDocument, user_home: Path) -> None:
+    config_path = user_home / "config.toml"
+    if not config_path.is_file():
+        return
+    try:
+        user_document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning(
+            "Skipping Codex user config merge from %s: %s",
+            config_path,
+            exc,
+        )
+        return
+    for key in CODEX_USER_CONFIG_TABLES:
+        if key not in user_document:
+            continue
+        document[key] = deepcopy(user_document[key])
 
 
 def _permission_profile(sandbox_mode: str) -> str:

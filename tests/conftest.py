@@ -63,14 +63,20 @@ def make_app_settings(
     encryption_key: str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
     approval_policy: str = "never",
     sandbox_mode: str = "danger-full-access",
+    claude_user_home: Path | None = None,
+    codex_user_home: Path | None = None,
 ) -> AppSettings:
     return AppSettings(
         project_root=root,
         database_path=database_path or (root / "cc-switch.db"),
         encryption_key=encryption_key,
-        claude=AppHomeSettings(home=root / "claude"),
+        claude=AppHomeSettings(
+            home=root / "claude",
+            user_home=claude_user_home if claude_user_home is not None else root / "user-claude",
+        ),
         codex=CodexSettings(
             home=root / "codex",
+            user_home=codex_user_home if codex_user_home is not None else root / "user-codex",
             approval_policy=approval_policy,
             sandbox_mode=sandbox_mode,
         ),

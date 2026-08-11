@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from ccs_plus.domain import ProviderError
@@ -12,6 +14,10 @@ def test_settings_default_homes_use_local_data(settings_root) -> None:
     assert settings.codex.home == settings_root / "data" / "codex"
     assert settings.grok.home == settings_root / "data" / "grok"
     assert settings.state_home("codex") == settings.codex.home
+    # user_home is not in settings.yaml; defaults to Path.home() / ".claude"|".codex"
+    assert settings.claude.user_home == Path.home() / ".claude"
+    assert settings.codex.user_home == Path.home() / ".codex"
+    assert settings.grok.user_home is None
 
 
 def test_settings_loads_codex_provider_defaults(settings_root) -> None:
@@ -25,10 +31,50 @@ def test_settings_loads_codex_provider_defaults(settings_root) -> None:
 
 def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> None:
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__HOME", "custom/codex")
+    monkeypatch.setenv("CCS_PLUS_APPS__CODEX__USER_HOME", "custom/user-codex")
+    monkeypatch.setenv("CCS_PLUS_APPS__CLAUDE__USER_HOME", "custom/user-claude")
     monkeypatch.setenv("CCS_PLUS_ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
     settings = load_settings(settings_root)
     assert settings.codex.home == settings_root / "custom" / "codex"
+    assert settings.codex.user_home == settings_root / "custom" / "user-codex"
+    assert settings.claude.user_home == settings_root / "custom" / "user-claude"
     assert settings.encryption_key == "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+
+
+def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None:
+    (settings_root / "settings.yaml").write_text(
+        "\n".join(
+            [
+                "database:",
+                '  path: "cc-switch.db"',
+                'encryption_key: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="',
+                "apps:",
+                "  claude:",
+                "    home: data/claude",
+                "    user_home: custom/claude-user",
+                "  codex:",
+                "    home: data/codex",
+                "    user_home: custom/codex-user",
+                "    approval_policy: never",
+                "    sandbox_mode: danger-full-access",
+                "  grok:",
+                "    home: data/grok",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    settings = load_settings(settings_root)
+    assert settings.claude.user_home == settings_root / "custom" / "claude-user"
+    assert settings.codex.user_home == settings_root / "custom" / "codex-user"
+
+
+def test_blank_user_home_keeps_builtin_default(settings_root, monkeypatch) -> None:
+    monkeypatch.setenv("CCS_PLUS_APPS__CLAUDE__USER_HOME", "   ")
+    monkeypatch.setenv("CCS_PLUS_APPS__CODEX__USER_HOME", "")
+    settings = load_settings(settings_root)
+    assert settings.claude.user_home == Path.home() / ".claude"
+    assert settings.codex.user_home == Path.home() / ".codex"
 
 
 def test_secrets_file_is_not_loaded(settings_root) -> None:

@@ -14,6 +14,7 @@ from ccs_plus.domain import (
     RuntimeProvider,
     validate_launch_options,
 )
+from ccs_plus.home_visibility import apply_claude_visibility, apply_codex_visibility
 from ccs_plus.managed_config import ensure_managed_config
 from ccs_plus.settings import AppSettings, environment_with_defaults
 
@@ -49,9 +50,20 @@ def build_launch_spec(
     effort = effort_override or runtime.effort
 
     if provider.app is AppKind.CLAUDE:
+        if settings.claude.user_home is not None:
+            apply_claude_visibility(state_home, settings.claude.user_home)
         argv = _claude_spec(executable, runtime, env, state_home, model, effort)
     elif provider.app is AppKind.CODEX:
-        argv = _codex_spec(executable, runtime, env, state_home, model, effort)
+        apply_codex_visibility(state_home, settings.codex.user_home)
+        argv = _codex_spec(
+            executable,
+            runtime,
+            env,
+            state_home,
+            model,
+            effort,
+            user_home=settings.codex.user_home,
+        )
     else:
         argv = _grok_spec(executable, runtime, env, state_home, model, effort)
     return LaunchSpec(argv=tuple(argv), cwd=working_directory, env=env)
@@ -103,13 +115,21 @@ def _codex_spec(
     state_home: Path,
     model: str | None,
     effort: str | None,
+    *,
+    user_home: Path | None = None,
 ) -> list[str]:
     _clear(env, "CODEX_HOME", "CODEX_SQLITE_HOME")
     env["CODEX_HOME"] = str(state_home)
     argv = [executable]
     runtime_provider = _custom_runtime(runtime)
     if runtime_provider is not None:
-        profile = ensure_managed_config(runtime_provider, state_home, model, effort)
+        profile = ensure_managed_config(
+            runtime_provider,
+            state_home,
+            model,
+            effort,
+            user_home=user_home,
+        )
         env[profile.env_key] = _required(runtime_provider.api_key, "Codex API key")
         argv.extend(["--profile", profile.name])
         approval_policy = _required(runtime_provider.approval_policy, "Codex approval_policy")

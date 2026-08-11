@@ -109,6 +109,113 @@ def test_codex_profile_rejects_unmanaged_file(tmp_path) -> None:
         ensure_managed_config(runtime, tmp_path, None, None)
 
 
+def test_codex_profile_merges_user_whitelist_tables(tmp_path) -> None:
+    runtime = _runtime(AppKind.CODEX)
+    user_home = tmp_path / "user-codex"
+    user_home.mkdir()
+    (user_home / "config.toml").write_text(
+        """
+[mcp_servers.mks-ttyd]
+command = "mks-ttyd"
+
+[plugins."browser@openai-bundled"]
+enabled = true
+
+[marketplaces.openai-bundled]
+source = "local"
+
+[shell_environment_policy]
+set = ["PATH"]
+
+[features]
+js_repl = true
+""",
+        encoding="utf-8",
+    )
+
+    profile = ensure_managed_config(runtime, tmp_path, None, None, user_home=user_home)
+    document = tomlkit.parse((tmp_path / f"{profile.name}.config.toml").read_text(encoding="utf-8"))
+
+    assert document["mcp_servers"]["mks-ttyd"]["command"] == "mks-ttyd"
+    assert document["plugins"]["browser@openai-bundled"]["enabled"] is True
+    assert document["marketplaces"]["openai-bundled"]["source"] == "local"
+    assert list(document["shell_environment_policy"]["set"]) == ["PATH"]
+    assert "features" not in document
+    assert document["model_providers"][profile.name]["base_url"] == "https://api.example.test/v1"
+
+
+def test_codex_profile_user_tables_refresh_on_each_ensure(tmp_path) -> None:
+    runtime = _runtime(AppKind.CODEX)
+    user_home = tmp_path / "user-codex"
+    user_home.mkdir()
+    config = user_home / "config.toml"
+    config.write_text(
+        """
+[mcp_servers.one]
+command = "first"
+""",
+        encoding="utf-8",
+    )
+    profile = ensure_managed_config(runtime, tmp_path, None, None, user_home=user_home)
+    path = tmp_path / f"{profile.name}.config.toml"
+    assert "first" in path.read_text(encoding="utf-8")
+
+    config.write_text(
+        """
+[mcp_servers.one]
+command = "second"
+""",
+        encoding="utf-8",
+    )
+    ensure_managed_config(runtime, tmp_path, None, None, user_home=user_home)
+    document = tomlkit.parse(path.read_text(encoding="utf-8"))
+    assert document["mcp_servers"]["one"]["command"] == "second"
+
+
+def test_codex_profile_preserves_projects_when_merging_user_tables(tmp_path) -> None:
+    runtime = _runtime(AppKind.CODEX)
+    profile = ensure_managed_config(runtime, tmp_path, None, None)
+    path = tmp_path / f"{profile.name}.config.toml"
+    path.write_text(
+        f"""# ccs-plus-managed: codex:{runtime.provider.id}
+[projects.'d:\\workspace']
+trust_level = "trusted"
+""",
+        encoding="utf-8",
+    )
+    user_home = tmp_path / "user-codex"
+    user_home.mkdir()
+    (user_home / "config.toml").write_text(
+        """
+[mcp_servers.demo]
+command = "demo"
+""",
+        encoding="utf-8",
+    )
+
+    ensure_managed_config(runtime, tmp_path, None, None, user_home=user_home)
+    document = tomlkit.parse(path.read_text(encoding="utf-8"))
+    assert document["projects"][r"d:\workspace"]["trust_level"] == "trusted"
+    assert document["mcp_servers"]["demo"]["command"] == "demo"
+
+
+def test_codex_profile_ignores_invalid_user_config(tmp_path, caplog) -> None:
+    import logging
+
+    runtime = _runtime(AppKind.CODEX)
+    user_home = tmp_path / "user-codex"
+    user_home.mkdir()
+    (user_home / "config.toml").write_text("[[[not toml", encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="ccs_plus.managed_config"):
+        profile = ensure_managed_config(runtime, tmp_path, None, None, user_home=user_home)
+
+    document = tomlkit.parse((tmp_path / f"{profile.name}.config.toml").read_text(encoding="utf-8"))
+    assert "Skipping Codex user config merge" in caplog.text
+    assert "mcp_servers" not in document
+    assert document["model_provider"] == profile.name
+
+
 def test_grok_config_preserves_default_and_uses_managed_model(tmp_path) -> None:
     runtime = _runtime(AppKind.GROK)
     config_path = tmp_path / "config.toml"
