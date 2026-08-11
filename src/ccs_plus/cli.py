@@ -108,7 +108,7 @@ def export_providers(output_path: Path | None) -> None:
     """Write custom providers to an encrypted JSON backup."""
     try:
         output_path = output_path or _default_backup_path()
-        document = build_backup_document(_repository().list(), _encryption_key())
+        document = build_backup_document(_repository().list_stored(), _encryption_key())
         _write_backup(output_path, document)
         records = document["providers"]
         assert isinstance(records, list)

@@ -229,7 +229,7 @@ def test_provider_export_writes_default_encrypted_backup(monkeypatch, tmp_path) 
     settings = _settings(tmp_path)
 
     class Repository:
-        def list(self):
+        def list_stored(self):
             return [provider]
 
     monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
@@ -244,6 +244,29 @@ def test_provider_export_writes_default_encrypted_backup(monkeypatch, tmp_path) 
     assert "Exported 1 custom providers" in result.output
     output_path = next((tmp_path / "data").glob("providers-*.json"))
     assert "cli-secret-key" not in output_path.read_text(encoding="utf-8")
+
+
+def test_provider_export_preserves_stored_provider_order(monkeypatch, tmp_path) -> None:
+    first = replace(_provider(), name="First")
+    second = replace(_provider(), name="Second")
+    settings = _settings(tmp_path)
+    output_path = tmp_path / "providers.json"
+
+    class Repository:
+        def list_stored(self):
+            return [second, first]
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    monkeypatch.setattr(
+        "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    )
+
+    result = CliRunner().invoke(main, ["providers", "export", str(output_path)])
+
+    assert result.exit_code == 0
+    document = json.loads(output_path.read_text(encoding="utf-8"))
+    assert [record["name"] for record in document["providers"]] == ["Second", "First"]
 
 
 def test_provider_import_validates_before_writing(monkeypatch, tmp_path) -> None:

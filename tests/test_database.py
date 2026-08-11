@@ -43,6 +43,19 @@ def test_add_list_and_delete_cascades_endpoints(database_path) -> None:
         repository.get(AppKind.CODEX, provider.id)
 
 
+def test_list_stored_keeps_insertion_order_while_list_re_sorts(database_path) -> None:
+    repository = ProviderRepository(database_path)
+    codex = _new_provider(AppKind.CODEX)
+    claude = _new_provider(AppKind.CLAUDE)
+    repository.add(codex)
+    repository.add(claude)
+
+    # list_stored() follows the physical (rowid) order in which rows were added.
+    assert [provider.id for provider in repository.list_stored()] == [codex.id, claude.id]
+    # list() re-sorts by app_type, so claude surfaces before codex.
+    assert [provider.id for provider in repository.list()] == [claude.id, codex.id]
+
+
 def test_add_many_rolls_back_when_a_later_provider_conflicts(database_path) -> None:
     repository = ProviderRepository(database_path)
     existing = _new_provider()

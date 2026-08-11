@@ -50,6 +50,34 @@ class ProviderRepository:
         finally:
             conn.close()
 
+    def list_stored(self, apps: Iterable[AppKind] | None = None) -> builtins.list[Provider]:
+        """Return providers in their actual stored order in the cc-switch database.
+
+        Unlike :meth:`list`, this does not re-sort by app_type/sort_index; rows come
+        back in their physical (rowid/insertion) order. Export uses this so a backup
+        document and its re-import preserve the providers' real order.
+        """
+        selected = tuple(apps or AppKind)
+        if not selected:
+            return []
+        conn = self._connect()
+        try:
+            self._preflight(conn)
+            placeholders = ", ".join("?" for _ in selected)
+            rows = conn.execute(
+                f"""
+                SELECT id, app_type, name, settings_config, category, created_at, notes, meta,
+                       is_current
+                FROM providers
+                WHERE app_type IN ({placeholders})
+                ORDER BY rowid
+                """,
+                tuple(app.db_app_type for app in selected),
+            ).fetchall()
+            return [self._row_to_provider(conn, row) for row in rows]
+        finally:
+            conn.close()
+
     def get(self, app: AppKind, provider_id: str) -> Provider:
         conn = self._connect()
         try:
