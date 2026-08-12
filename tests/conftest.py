@@ -63,6 +63,7 @@ def make_app_settings(
     encryption_key: str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
     approval_policy: str = "never",
     sandbox_mode: str = "danger-full-access",
+    session_model_provider: str = "ccs-plus-managed",
     claude_user_home: Path | None = None,
     codex_user_home: Path | None = None,
 ) -> AppSettings:
@@ -77,6 +78,7 @@ def make_app_settings(
         codex=CodexSettings(
             home=root / "codex",
             user_home=codex_user_home if codex_user_home is not None else root / "user-codex",
+            session_model_provider=session_model_provider,
             approval_policy=approval_policy,
             sandbox_mode=sandbox_mode,
         ),
@@ -104,6 +106,7 @@ def settings_root(tmp_path: Path, database_path: Path) -> Path:
                 "    home: data/claude",
                 "  codex:",
                 "    home: data/codex",
+                "    session_model_provider: ccs-plus-managed",
                 "    approval_policy: never",
                 "    sandbox_mode: danger-full-access",
                 "  grok:",

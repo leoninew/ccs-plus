@@ -19,6 +19,7 @@ apps:
     home: data/claude
   codex:
     home: data/codex
+    session_model_provider: ccs-plus-managed
     approval_policy: never
     sandbox_mode: danger-full-access
   grok:

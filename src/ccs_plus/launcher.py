@@ -60,9 +60,10 @@ def build_launch_spec(
             runtime,
             env,
             state_home,
-            model,
-            effort,
+            model=model,
+            effort=effort,
             user_home=settings.codex.user_home,
+            session_model_provider=settings.codex.session_model_provider,
         )
     else:
         argv = _grok_spec(executable, runtime, env, state_home, model, effort)
@@ -115,8 +116,8 @@ def _codex_spec(
     state_home: Path,
     model: str | None,
     effort: str | None,
-    *,
     user_home: Path | None = None,
+    session_model_provider: str | None = None,
 ) -> list[str]:
     _clear(env, "CODEX_HOME", "CODEX_SQLITE_HOME")
     env["CODEX_HOME"] = str(state_home)
@@ -129,15 +130,15 @@ def _codex_spec(
             model,
             effort,
             user_home=user_home,
+            session_model_provider=session_model_provider,
         )
         env[profile.env_key] = _required(runtime_provider.api_key, "Codex API key")
         argv.extend(["--profile", profile.name])
-        approval_policy = _required(runtime_provider.approval_policy, "Codex approval_policy")
-    else:
-        approval_policy = "never"
+        # The profile contains the provider model, reasoning effort, and permission policy.
+        return argv
     if model:
         argv.extend(["--model", model])
-    argv.extend(["--ask-for-approval", approval_policy])
+    argv.extend(["--ask-for-approval", "never"])
     return argv
 
 

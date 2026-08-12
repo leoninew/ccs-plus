@@ -39,9 +39,20 @@ def ensure_managed_config(
     effort: str | None,
     *,
     user_home: Path | None = None,
+    session_model_provider: str | None = None,
 ) -> ManagedProfile:
     if runtime.provider.app is AppKind.CODEX:
-        return _ensure_codex_profile(runtime, state_home, model, effort, user_home=user_home)
+        return _ensure_codex_profile(
+            runtime,
+            state_home,
+            model,
+            effort,
+            user_home=user_home,
+            session_model_provider=_required(
+                session_model_provider,
+                "Codex session_model_provider",
+            ),
+        )
     if runtime.provider.app is AppKind.GROK:
         return _ensure_grok_model(runtime, state_home, model)
     raise ProviderError("Claude does not need a persistent managed configuration.")
@@ -54,6 +65,7 @@ def _ensure_codex_profile(
     effort: str | None,
     *,
     user_home: Path | None = None,
+    session_model_provider: str,
 ) -> ManagedProfile:
     profile = _managed_name(runtime, "codex")
     env_key = _managed_env_key(runtime, "CODEX")
@@ -69,7 +81,9 @@ def _ensure_codex_profile(
 
         document = tomlkit.document()
         document.add(tomlkit.comment(marker))
-        document["model_provider"] = profile
+        # Codex filters the interactive /resume list by model_provider. Keep this
+        # identity stable while the profile name continues to select a provider.
+        document["model_provider"] = session_model_provider
         if model:
             document["model"] = model
         if effort:
@@ -90,7 +104,7 @@ def _ensure_codex_profile(
         provider["base_url"] = _required(runtime.endpoint, "Codex provider endpoint")
         provider["wire_api"] = "responses"
         provider["env_key"] = env_key
-        providers[profile] = provider
+        providers[session_model_provider] = provider
         document["model_providers"] = providers
 
         if user_home is not None:

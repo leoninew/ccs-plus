@@ -5,10 +5,12 @@ import logging
 from pathlib import Path
 
 import pytest
+import tomlkit
 from conftest import make_app_settings
 
 from ccs_plus.adapters import build_provider
 from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider, ProviderError
+from ccs_plus.home_visibility import _is_link, _links_to
 from ccs_plus.launcher import LaunchSpec, build_launch_spec, launch
 from ccs_plus.settings import AppSettings
 
@@ -19,14 +21,20 @@ def _settings(root: Path) -> AppSettings:
     return make_app_settings(root)
 
 
-def _provider(app: AppKind):
+def _provider(
+    app: AppKind,
+    *,
+    name: str = "Example Provider",
+    endpoint: str = "https://api.example.test/v1",
+    model: str = "example-model",
+):
     return build_provider(
         NewProvider(
             app=app,
-            name="Example Provider",
-            endpoint="https://api.example.test/v1",
+            name=name,
+            endpoint=endpoint,
             api_key="launch-secret-key",
-            model="example-model",
+            model=model,
             effort="high" if app is not AppKind.GROK else "xhigh",
             notes=None,
         ),
@@ -38,11 +46,11 @@ def _provider(app: AppKind):
     ("app", "required_args"),
     [
         (AppKind.CLAUDE, ("--dangerously-skip-permissions",)),
-        (AppKind.CODEX, ("--ask-for-approval", "never")),
+        (AppKind.CODEX, ("--profile",)),
         (AppKind.GROK, ("--sandbox", "workspace", "--always-approve")),
     ],
 )
-def test_launch_specs_keep_secret_out_of_argv_and_use_stable_home(
+def test_launch_specs_keep_secret_out_of_argv_and_use_expected_home(
     tmp_path, monkeypatch, app: AppKind, required_args: tuple[str, ...]
 ) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-cli")
@@ -51,18 +59,21 @@ def test_launch_specs_keep_secret_out_of_argv_and_use_stable_home(
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "temporary-claude-home")
     monkeypatch.setenv("GROK_HOME", "temporary-grok-home")
 
-    spec = build_launch_spec(_provider(app), _settings(tmp_path), tmp_path)
+    settings = _settings(tmp_path)
+    provider = _provider(app)
+    spec = build_launch_spec(provider, settings, tmp_path)
 
     assert "launch-secret-key" not in spec.argv
     assert all(argument in spec.argv for argument in required_args)
-    state_home = _settings(tmp_path).state_home(app.value)
+    state_home = settings.state_home(app.value)
     state_keys = {
         AppKind.CLAUDE: "CLAUDE_CONFIG_DIR",
         AppKind.CODEX: "CODEX_HOME",
         AppKind.GROK: "GROK_HOME",
     }
     state_key = state_keys[app]
-    assert spec.env[state_key] == str(state_home)
+    expected_home = state_home
+    assert spec.env[state_key] == str(expected_home)
     assert spec.cwd == tmp_path.resolve()
     if app is AppKind.GROK:
         assert "--reasoning-effort" in spec.argv
@@ -73,7 +84,7 @@ def test_launch_specs_keep_secret_out_of_argv_and_use_stable_home(
         assert "--dangerously-bypass-approvals-and-sandbox" not in spec.argv
 
 
-def test_codex_launch_uses_provider_approval_policy(tmp_path, monkeypatch) -> None:
+def test_codex_launch_uses_provider_profile_for_approval_policy(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
     provider = build_provider(
         NewProvider(
@@ -87,13 +98,10 @@ def test_codex_launch_uses_provider_approval_policy(tmp_path, monkeypatch) -> No
         ),
         CodexAppConfig(approval_policy="on-request", sandbox_mode="workspace-write"),
     )
-    spec = build_launch_spec(provider, _settings(tmp_path), tmp_path)
-    assert (
-        spec.argv[spec.argv.index("--ask-for-approval")],
-        spec.argv[spec.argv.index("--ask-for-approval") + 1],
-    ) == ("--ask-for-approval", "on-request")
+    settings = _settings(tmp_path)
+    spec = build_launch_spec(provider, settings, tmp_path)
     profile_name = spec.argv[spec.argv.index("--profile") + 1]
-    profile_text = (_settings(tmp_path).codex.home / f"{profile_name}.config.toml").read_text(
+    profile_text = (Path(spec.env["CODEX_HOME"]) / f"{profile_name}.config.toml").read_text(
         encoding="utf-8"
     )
     assert 'approval_policy = "on-request"' in profile_text
@@ -105,9 +113,23 @@ def test_codex_launch_profile_contains_no_api_key(tmp_path, monkeypatch) -> None
     spec = build_launch_spec(_provider(AppKind.CODEX), _settings(tmp_path), tmp_path)
 
     profile_name = spec.argv[spec.argv.index("--profile") + 1]
-    profile = _settings(tmp_path).codex.home / f"{profile_name}.config.toml"
+    profile = Path(spec.env["CODEX_HOME"]) / f"{profile_name}.config.toml"
     assert "launch-secret-key" not in profile.read_text(encoding="utf-8")
     assert any(key.startswith("CCS_PLUS_CODEX_") for key in spec.env)
+
+
+def test_codex_launch_uses_configured_session_model_provider(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+    settings = make_app_settings(tmp_path, session_model_provider="ccs-plus-shared")
+
+    spec = build_launch_spec(_provider(AppKind.CODEX), settings, tmp_path)
+
+    profile_name = spec.argv[spec.argv.index("--profile") + 1]
+    document = tomlkit.parse(
+        (Path(spec.env["CODEX_HOME"]) / f"{profile_name}.config.toml").read_text(encoding="utf-8")
+    )
+    assert document["model_provider"] == "ccs-plus-shared"
+    assert list(document["model_providers"]) == ["ccs-plus-shared"]
 
 
 def test_launch_uses_current_directory_when_cwd_is_omitted(tmp_path, monkeypatch) -> None:
@@ -131,7 +153,7 @@ def test_launch_model_and_effort_overrides_are_transient(tmp_path, monkeypatch) 
     )
 
     profile_name = spec.argv[spec.argv.index("--profile") + 1]
-    profile = _settings(tmp_path).codex.home / f"{profile_name}.config.toml"
+    profile = Path(spec.env["CODEX_HOME"]) / f"{profile_name}.config.toml"
     profile_text = profile.read_text(encoding="utf-8")
     assert 'model = "override-model"' in profile_text
     assert 'model_reasoning_effort = "minimal"' in profile_text
@@ -204,12 +226,13 @@ command = "mks-ttyd"
 
     spec = build_launch_spec(_provider(AppKind.CODEX), settings, tmp_path)
 
-    skills = settings.codex.home / "skills"
+    app_home = Path(spec.env["CODEX_HOME"])
+    skills = app_home / "skills"
     assert (skills / "pomelo-db").exists()
     assert not (skills / ".system").exists()
-    assert (settings.codex.home / "plugins" / "cache").exists()
+    assert (app_home / "plugins" / "cache").exists()
     profile_name = spec.argv[spec.argv.index("--profile") + 1]
-    profile_text = (settings.codex.home / f"{profile_name}.config.toml").read_text(encoding="utf-8")
+    profile_text = (app_home / f"{profile_name}.config.toml").read_text(encoding="utf-8")
     assert "mks-ttyd" in profile_text
 
 
@@ -237,11 +260,60 @@ command = "mks-ttyd"
         is_current=False,
     )
 
-    build_launch_spec(official, settings, tmp_path)
+    spec = build_launch_spec(official, settings, tmp_path)
+    app_home = Path(spec.env["CODEX_HOME"])
 
-    assert (settings.codex.home / "skills" / "specflow").exists()
-    assert not (settings.codex.home / "config.toml").exists()
-    assert not list(settings.codex.home.glob("ccs-plus-codex-*.config.toml"))
+    assert (app_home / "skills" / "specflow").exists()
+    assert not (app_home / "config.toml").exists()
+    assert not list(app_home.glob("ccs-plus-codex-*.config.toml"))
+
+
+@pytest.mark.parametrize("app", (AppKind.CODEX, AppKind.GROK))
+def test_launch_specs_share_the_app_home_across_providers(tmp_path, monkeypatch, app) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-cli")
+    settings = _settings(tmp_path)
+    first = _provider(
+        app,
+        name="First Provider",
+        endpoint="https://first.example.test/v1",
+        model="first-model",
+    )
+    second = _provider(
+        app,
+        name="Second Provider",
+        endpoint="https://second.example.test/v1",
+        model="second-model",
+    )
+
+    first_spec = build_launch_spec(first, settings, tmp_path)
+    second_spec = build_launch_spec(second, settings, tmp_path)
+
+    home_key = "CODEX_HOME" if app is AppKind.CODEX else "GROK_HOME"
+    first_home = Path(first_spec.env[home_key])
+    second_home = Path(second_spec.env[home_key])
+    shared = settings.state_home(app.value) / "sessions"
+    assert first_home == shared.parent
+    assert second_home == shared.parent
+    if app is AppKind.CODEX:
+        sessions = first_home / "sessions"
+        assert sessions.is_dir()
+        assert _is_link(sessions)
+        assert _links_to(sessions, settings.codex.user_home / "sessions")
+        assert "CODEX_SQLITE_HOME" not in first_spec.env
+        assert "CODEX_SQLITE_HOME" not in second_spec.env
+        first_profile = first_spec.argv[first_spec.argv.index("--profile") + 1]
+        second_profile = second_spec.argv[second_spec.argv.index("--profile") + 1]
+        assert first_profile != second_profile
+        first_document = tomlkit.parse(
+            (first_home / f"{first_profile}.config.toml").read_text(encoding="utf-8")
+        )
+        second_document = tomlkit.parse(
+            (second_home / f"{second_profile}.config.toml").read_text(encoding="utf-8")
+        )
+        assert first_document["model_provider"] == settings.codex.session_model_provider
+        assert second_document["model_provider"] == settings.codex.session_model_provider
+        assert "--model" not in first_spec.argv
+        assert "--ask-for-approval" not in first_spec.argv
 
 
 def test_claude_launch_links_and_syncs_mcp(tmp_path, monkeypatch) -> None:

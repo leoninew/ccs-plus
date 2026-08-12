@@ -8,6 +8,7 @@ from pathlib import Path
 from ccs_plus.home_visibility import (
     _is_link,
     _links_to,
+    link_codex_sessions,
     link_user_entries,
     sync_claude_mcp_servers,
 )
@@ -87,6 +88,37 @@ def test_link_user_entries_missing_source_is_noop(tmp_path: Path) -> None:
     target = tmp_path / "state" / "skills"
     link_user_entries(tmp_path / "missing", target)
     assert not target.exists()
+
+
+def test_link_codex_sessions_links_only_the_session_directory(tmp_path: Path) -> None:
+    user_home = tmp_path / "user-codex"
+    state_home = tmp_path / "state-codex"
+
+    link_codex_sessions(state_home, user_home)
+
+    source = user_home / "sessions"
+    target = state_home / "sessions"
+    assert source.is_dir()
+    assert target.is_dir()
+    assert _is_link(target)
+    assert _links_to(target, source)
+    assert not _is_link(state_home)
+    (target / "created-by-runtime.jsonl").write_text("session", encoding="utf-8")
+    assert (source / "created-by-runtime.jsonl").read_text(encoding="utf-8") == "session"
+
+
+def test_link_codex_sessions_preserves_existing_directory(tmp_path: Path) -> None:
+    user_home = tmp_path / "user-codex"
+    state_home = tmp_path / "state-codex"
+    existing = state_home / "sessions"
+    existing.mkdir(parents=True)
+    marker = existing / "keep.jsonl"
+    marker.write_text("state", encoding="utf-8")
+
+    link_codex_sessions(state_home, user_home)
+
+    assert marker.read_text(encoding="utf-8") == "state"
+    assert not _is_link(existing)
 
 
 def test_sync_claude_mcp_servers_merges_user_over_existing(tmp_path: Path) -> None:

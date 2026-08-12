@@ -1,4 +1,4 @@
-"""Bring selected user-home skills/plugins into isolated state homes."""
+"""Bring selected user-home state into isolated runtime homes."""
 
 from __future__ import annotations
 
@@ -46,8 +46,35 @@ def link_user_entries(
 
 
 def apply_codex_visibility(state_home: Path, user_home: Path) -> None:
+    link_codex_sessions(state_home, user_home)
     link_user_entries(user_home / "skills", state_home / "skills", skip_names={".system"})
     link_user_entries(user_home / "plugins", state_home / "plugins")
+
+
+def link_codex_sessions(state_home: Path, user_home: Path) -> None:
+    """Expose the real Codex session store without sharing the rest of its home.
+
+    ``state_home`` remains the provider-isolated ``CODEX_HOME``. Existing
+    state-home content remains untouched.
+    """
+    if _path_key(state_home) == _path_key(user_home):
+        return
+
+    source = user_home / "sessions"
+    target = state_home / "sessions"
+    try:
+        source.mkdir(parents=True, exist_ok=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise OSError(f"Failed to prepare Codex session paths: {exc}") from exc
+
+    if _path_lexists(target):
+        return
+
+    try:
+        _link_directory(source, target)
+    except OSError as exc:
+        logger.warning("Failed to link Codex sessions %s -> %s: %s", target, source, exc)
 
 
 def apply_claude_visibility(state_home: Path, user_home: Path) -> None:

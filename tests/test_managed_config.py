@@ -5,9 +5,17 @@ import tomlkit
 
 from ccs_plus.adapters import build_provider, runtime_from_provider
 from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, ProviderError
-from ccs_plus.managed_config import ensure_managed_config
+from ccs_plus.managed_config import ensure_managed_config as _ensure_managed_config
 
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
+
+
+def ensure_managed_config(*args, **kwargs):
+    return _ensure_managed_config(
+        *args,
+        session_model_provider="ccs-plus-managed",
+        **kwargs,
+    )
 
 
 def _runtime(app: AppKind):
@@ -41,7 +49,8 @@ def test_codex_profile_uses_provider_policy_but_no_api_key(tmp_path) -> None:
     # Permission profiles and legacy sandbox settings do not compose.
     assert "sandbox_mode" not in document
     assert "sandbox_workspace_write" not in document
-    assert document["model_providers"][profile.name]["env_key"] == profile.env_key
+    assert document["model_provider"] == "ccs-plus-managed"
+    assert document["model_providers"]["ccs-plus-managed"]["env_key"] == profile.env_key
 
 
 def test_codex_profile_follows_provider_sandbox_mode(tmp_path) -> None:
@@ -141,7 +150,9 @@ js_repl = true
     assert document["marketplaces"]["openai-bundled"]["source"] == "local"
     assert list(document["shell_environment_policy"]["set"]) == ["PATH"]
     assert "features" not in document
-    assert document["model_providers"][profile.name]["base_url"] == "https://api.example.test/v1"
+    assert (
+        document["model_providers"]["ccs-plus-managed"]["base_url"] == "https://api.example.test/v1"
+    )
 
 
 def test_codex_profile_user_tables_refresh_on_each_ensure(tmp_path) -> None:
@@ -213,7 +224,44 @@ def test_codex_profile_ignores_invalid_user_config(tmp_path, caplog) -> None:
     document = tomlkit.parse((tmp_path / f"{profile.name}.config.toml").read_text(encoding="utf-8"))
     assert "Skipping Codex user config merge" in caplog.text
     assert "mcp_servers" not in document
-    assert document["model_provider"] == profile.name
+    assert document["model_provider"] == "ccs-plus-managed"
+
+
+def test_codex_profiles_share_model_provider_across_providers(tmp_path) -> None:
+    first = _runtime(AppKind.CODEX)
+    second_provider = build_provider(
+        NewProvider(
+            app=AppKind.CODEX,
+            name="Second Provider",
+            endpoint="https://second.example.test/v1",
+            api_key="second-secret-key",
+            model="second-model",
+            effort="minimal",
+            notes=None,
+        ),
+        _CODEX,
+    )
+    second = runtime_from_provider(second_provider)
+
+    first_profile = ensure_managed_config(first, tmp_path, None, None)
+    second_profile = ensure_managed_config(second, tmp_path, None, None)
+    first_document = tomlkit.parse(
+        (tmp_path / f"{first_profile.name}.config.toml").read_text(encoding="utf-8")
+    )
+    second_document = tomlkit.parse(
+        (tmp_path / f"{second_profile.name}.config.toml").read_text(encoding="utf-8")
+    )
+
+    assert first_profile.name != second_profile.name
+    assert first_document["model_provider"] == "ccs-plus-managed"
+    assert second_document["model_provider"] == "ccs-plus-managed"
+    assert list(first_document["model_providers"]) == ["ccs-plus-managed"]
+    assert list(second_document["model_providers"]) == ["ccs-plus-managed"]
+
+
+def test_codex_profile_requires_configured_session_model_provider(tmp_path) -> None:
+    with pytest.raises(ProviderError, match="session_model_provider"):
+        _ensure_managed_config(_runtime(AppKind.CODEX), tmp_path, None, None)
 
 
 def test_grok_config_preserves_default_and_uses_managed_model(tmp_path) -> None:

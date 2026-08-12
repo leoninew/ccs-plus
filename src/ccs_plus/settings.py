@@ -25,6 +25,7 @@ class AppHomeSettings:
 class CodexSettings:
     home: Path
     user_home: Path
+    session_model_provider: str
     approval_policy: str
     sandbox_mode: str
 
@@ -135,6 +136,10 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
                 _get(config, "apps.codex.user_home"),
                 "apps.codex.user_home",
                 ".codex",
+            ),
+            session_model_provider=_resolve_non_empty_string(
+                _get(config, "apps.codex.session_model_provider"),
+                "apps.codex.session_model_provider",
             ),
             approval_policy=_resolve_non_empty_string(
                 _get(config, "apps.codex.approval_policy"),
