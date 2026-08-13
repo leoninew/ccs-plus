@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -105,7 +106,46 @@ def test_codex_launch_uses_provider_profile_for_approval_policy(tmp_path, monkey
         encoding="utf-8"
     )
     assert 'approval_policy = "on-request"' in profile_text
-    assert 'default_permissions = ":workspace-write"' in profile_text
+    assert 'default_permissions = ":workspace"' in profile_text
+
+
+def test_codex_launch_falls_back_to_settings_policy_without_provider_policy(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+    provider = build_provider(
+        NewProvider(
+            app=AppKind.CODEX,
+            name="No Policy Provider",
+            endpoint="https://api.example.test/v1",
+            api_key="launch-secret-key",
+            model="example-model",
+            effort=None,
+            notes=None,
+        ),
+        _CODEX,
+    )
+    config = tomlkit.parse(provider.settings_config["config"])
+    del config["approval_policy"]
+    del config["sandbox_mode"]
+    provider = replace(
+        provider,
+        settings_config={**provider.settings_config, "config": tomlkit.dumps(config)},
+    )
+    settings = make_app_settings(
+        tmp_path,
+        approval_policy="on-request",
+        sandbox_mode="workspace-write",
+    )
+
+    spec = build_launch_spec(provider, settings, tmp_path)
+
+    profile_name = spec.argv[spec.argv.index("--profile") + 1]
+    profile_text = (Path(spec.env["CODEX_HOME"]) / f"{profile_name}.config.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'approval_policy = "on-request"' in profile_text
+    assert 'default_permissions = ":workspace"' in profile_text
 
 
 def test_launch_uses_settings_permission_defaults_when_provider_omits_them(
@@ -146,7 +186,7 @@ def test_launch_uses_settings_permission_defaults_when_provider_omits_them(
         encoding="utf-8"
     )
     assert 'approval_policy = "on-request"' in profile_text
-    assert 'default_permissions = ":workspace-write"' in profile_text
+    assert 'default_permissions = ":workspace"' in profile_text
     assert grok_spec.argv[grok_spec.argv.index("--sandbox") + 1] == "restricted"
     assert "--always-approve" not in grok_spec.argv
 
@@ -262,6 +302,65 @@ def test_launch_model_and_effort_overrides_are_transient(tmp_path, monkeypatch) 
     profile_text = profile.read_text(encoding="utf-8")
     assert 'model = "override-model"' in profile_text
     assert 'model_reasoning_effort = "minimal"' in profile_text
+
+
+def test_codex_resume_uses_session_cwd_and_resume_subcommand(tmp_path, monkeypatch) -> None:
+    from ccs_plus.sessions import Session
+
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+    work = tmp_path / "session-work"
+    work.mkdir()
+    session = Session(
+        app=AppKind.CODEX,
+        session_id="sid-123",
+        title="resume me",
+        cwd=str(work),
+        modified_at=1.0,
+    )
+
+    spec = build_launch_spec(
+        _provider(AppKind.CODEX),
+        _settings(tmp_path),
+        tmp_path,
+        resume=session,
+        approval_policy="on-request",
+        sandbox_mode="workspace-write",
+    )
+
+    assert spec.cwd == work.resolve()
+    assert spec.argv[0:3] == ("native-codex", "resume", "sid-123")
+    assert "--profile" in spec.argv
+    profile_name = spec.argv[spec.argv.index("--profile") + 1]
+    profile_text = (Path(spec.env["CODEX_HOME"]) / f"{profile_name}.config.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'approval_policy = "on-request"' in profile_text
+    assert 'default_permissions = ":workspace"' in profile_text
+
+
+def test_claude_resume_adds_resume_flag(tmp_path, monkeypatch) -> None:
+    from ccs_plus.sessions import Session
+
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-claude")
+    work = tmp_path / "claude-work"
+    work.mkdir()
+    session = Session(
+        app=AppKind.CLAUDE,
+        session_id="claude-sid",
+        title="hello",
+        cwd=str(work),
+        modified_at=1.0,
+    )
+
+    spec = build_launch_spec(
+        _provider(AppKind.CLAUDE),
+        _settings(tmp_path),
+        tmp_path,
+        resume=session,
+    )
+
+    assert spec.argv[0:3] == ("native-claude", "--resume", "claude-sid")
+    assert spec.cwd == work.resolve()
 
 
 def test_official_claude_does_not_inherit_custom_route(tmp_path, monkeypatch) -> None:

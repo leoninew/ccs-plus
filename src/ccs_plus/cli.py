@@ -10,12 +10,15 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from ccs_plus import tui
 from ccs_plus.adapters import build_provider, display_configuration, runtime_from_provider
 from ccs_plus.database import ProviderRepository
 from ccs_plus.domain import AppKind, NewProvider, Provider, ProviderError, validate_new_provider
+from ccs_plus.launch_history import LaunchHistory
 from ccs_plus.launcher import build_launch_spec, launch
 from ccs_plus.provider_transfer import build_backup_document, parse_backup_document
 from ccs_plus.settings import AppSettings, load_settings
+from ccs_plus.tui import LaunchPlan
 
 logger = logging.getLogger(__name__)
 HELP_CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
@@ -33,9 +36,14 @@ def _app(value: str) -> AppKind:
     return AppKind.from_cli_value(value)
 
 
-@click.group(context_settings=HELP_CONTEXT_SETTINGS)
-def main() -> None:
+@click.group(
+    context_settings=HELP_CONTEXT_SETTINGS, invoke_without_command=True, no_args_is_help=False
+)
+@click.pass_context
+def main(ctx: click.Context) -> None:
     """Manage cc-switch providers and launch native coding CLIs."""
+    if ctx.invoked_subcommand is None:
+        _interactive_launch()
 
 
 @main.group(context_settings=HELP_CONTEXT_SETTINGS)
@@ -227,6 +235,49 @@ def launch_provider(
             raise click.exceptions.Exit(exit_code)
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+def _interactive_launch() -> None:
+    """Open the multi-pane TUI launcher and hand off to the native CLI."""
+    try:
+        settings = _settings()
+        repository = ProviderRepository(settings.database_path)
+        history = LaunchHistory.load(_launch_history_path(settings))
+        providers = repository.list(list(AppKind))
+        if not providers:
+            raise ProviderError("No providers are configured.")
+        plan = _run_launcher(settings, providers, history)
+        if plan is None:
+            click.echo("Cancelled.")
+            return
+        _execute_plan(plan, settings, history)
+    except ProviderError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _run_launcher(
+    settings: AppSettings, providers: list[Provider], history: LaunchHistory
+) -> LaunchPlan | None:
+    return tui.run_launcher(settings=settings, providers=providers, history=history)
+
+
+def _execute_plan(plan: LaunchPlan, settings: AppSettings, history: LaunchHistory) -> None:
+    spec = build_launch_spec(
+        plan.provider,
+        settings,
+        plan.cwd,
+        resume=plan.session,
+        approval_policy=plan.approval_policy,
+        sandbox_mode=plan.sandbox_mode,
+    )
+    history.record_launch(plan.provider)
+    exit_code = launch(spec)
+    if exit_code:
+        raise click.exceptions.Exit(exit_code)
+
+
+def _launch_history_path(settings: AppSettings) -> Path:
+    return settings.project_root / "data" / "launch-history.json"
 
 
 def _configure_verbose_logging() -> None:

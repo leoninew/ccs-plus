@@ -16,6 +16,7 @@ from ccs_plus.domain import (
 )
 from ccs_plus.home_visibility import apply_claude_visibility, apply_codex_visibility
 from ccs_plus.managed_config import ensure_managed_config, sync_codex_user_config
+from ccs_plus.sessions import Session
 from ccs_plus.settings import AppSettings, environment_with_defaults
 
 logger = logging.getLogger(__name__)
@@ -34,8 +35,23 @@ def build_launch_spec(
     cwd: Path | None = None,
     model_override: str | None = None,
     effort_override: str | None = None,
+    *,
+    resume: Session | None = None,
+    approval_policy: str | None = None,
+    sandbox_mode: str | None = None,
 ) -> LaunchSpec:
-    working_directory = (cwd or Path.cwd()).resolve()
+    if resume is not None and resume.app is not provider.app:
+        raise ProviderError(
+            f"Session app {resume.app.value} does not match provider app {provider.app.value}."
+        )
+    if resume is not None and resume.cwd:
+        working_directory = Path(resume.cwd).expanduser()
+        if not working_directory.is_absolute():
+            working_directory = (Path.cwd() / working_directory).resolve()
+        else:
+            working_directory = working_directory.resolve()
+    else:
+        working_directory = (cwd or Path.cwd()).resolve()
     if not working_directory.is_dir():
         raise ProviderError(f"Working directory does not exist: {working_directory}")
     validate_launch_options(provider.app, model_override, effort_override)
@@ -44,10 +60,20 @@ def build_launch_spec(
         raise ProviderError(f"{provider.app.executable} CLI was not found on PATH.")
 
     runtime = _runtime_with_permission_defaults(runtime_from_provider(provider), settings)
+    # TUI overrides win over provider + settings defaults.
+    if approval_policy is not None or sandbox_mode is not None:
+        runtime = replace(
+            runtime,
+            approval_policy=approval_policy
+            if approval_policy is not None
+            else runtime.approval_policy,
+            sandbox_mode=sandbox_mode if sandbox_mode is not None else runtime.sandbox_mode,
+        )
     env = environment_with_defaults()
     state_home = settings.state_home(provider.app.value)
     model = model_override or runtime.model
     effort = effort_override or runtime.effort
+    session_id = resume.session_id if resume is not None else None
 
     if provider.app is AppKind.CLAUDE:
         if settings.claude.user_home is not None:
@@ -60,6 +86,7 @@ def build_launch_spec(
             model,
             effort,
             _required(runtime.permission_mode, "Claude permission_mode"),
+            session_id=session_id,
         )
     elif provider.app is AppKind.CODEX:
         apply_codex_visibility(state_home, settings.codex.user_home)
@@ -73,6 +100,9 @@ def build_launch_spec(
             user_home=settings.codex.user_home,
             session_model_provider=settings.codex.session_model_provider,
             project_directory=working_directory,
+            approval_policy=runtime.approval_policy,
+            sandbox_mode=runtime.sandbox_mode,
+            session_id=session_id,
         )
     else:
         argv = _grok_spec(
@@ -84,6 +114,7 @@ def build_launch_spec(
             effort,
             _required(runtime.sandbox_mode, "Grok sandbox_mode"),
             _required_bool(runtime.always_approve, "Grok always_approve"),
+            session_id=session_id,
         )
     return LaunchSpec(argv=tuple(argv), cwd=working_directory, env=env)
 
@@ -103,6 +134,8 @@ def _claude_spec(
     model: str | None,
     effort: str | None,
     permission_mode: str,
+    *,
+    session_id: str | None = None,
 ) -> list[str]:
     _clear(env, "CLAUDE_CONFIG_DIR")
     env["CLAUDE_CONFIG_DIR"] = str(state_home)
@@ -120,6 +153,8 @@ def _claude_spec(
     if runtime_provider is not None:
         env.update(runtime_provider.claude_env)
     argv = [executable]
+    if session_id:
+        argv.extend(["--resume", session_id])
     if model:
         argv.extend(["--model", model])
     if effort:
@@ -138,10 +173,15 @@ def _codex_spec(
     user_home: Path | None = None,
     session_model_provider: str | None = None,
     project_directory: Path | None = None,
+    approval_policy: str | None = None,
+    sandbox_mode: str | None = None,
+    session_id: str | None = None,
 ) -> list[str]:
     _clear(env, "CODEX_HOME", "CODEX_SQLITE_HOME")
     env["CODEX_HOME"] = str(state_home)
     argv = [executable]
+    if session_id:
+        argv.extend(["resume", session_id])
     runtime_provider = _custom_runtime(runtime)
     if runtime_provider is not None:
         profile = ensure_managed_config(
@@ -152,6 +192,8 @@ def _codex_spec(
             user_home=user_home,
             session_model_provider=session_model_provider,
             project_directory=project_directory,
+            approval_policy=approval_policy,
+            sandbox_mode=sandbox_mode,
         )
         env[profile.env_key] = _required(runtime_provider.api_key, "Codex API key")
         argv.extend(["--profile", profile.name])
@@ -159,7 +201,7 @@ def _codex_spec(
         return argv
     if user_home is not None:
         sync_codex_user_config(state_home, user_home, project_directory)
-    if model:
+    if model and not session_id:
         argv.extend(["--model", model])
     argv.extend(["--ask-for-approval", "never"])
     return argv
@@ -174,10 +216,14 @@ def _grok_spec(
     effort: str | None,
     sandbox_mode: str,
     always_approve: bool,
+    *,
+    session_id: str | None = None,
 ) -> list[str]:
     _clear(env, "GROK_HOME", "GROK_MODELS_BASE_URL", "GROK_MODELS_LIST_URL")
     env["GROK_HOME"] = str(state_home)
     argv = [executable]
+    if session_id:
+        argv.extend(["--resume", session_id])
     runtime_provider = _custom_runtime(runtime)
     if runtime_provider is not None:
         profile = ensure_managed_config(runtime_provider, state_home, model, effort)

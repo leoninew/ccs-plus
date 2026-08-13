@@ -11,6 +11,8 @@
 ```powershell
 make install
 make release
+ccs-plus
+uv run ccs-plus providers list
 ```
 
 安装完成后，可使用 `ccs-plus --help` 查看命令；确认 `settings.yaml` 和 cc-switch 数据库已配置后，再列出已有 provider：
@@ -21,6 +23,8 @@ ccs-plus providers list
 ```
 
 也可以使用 `pip install -e .` 安装 editable 版本。
+
+直接运行 `ccs-plus` 会进入交互式启动器：选择 Agent 后会显示其 Provider（按使用次数排序），默认选择该 Agent 上次使用的 Provider；工作目录默认是当前目录，可编辑，确认后启动原生 CLI。启动历史保存为项目本地 `data/launch-history.json`，不写入 cc-switch 数据库。
 
 ## 配置
 

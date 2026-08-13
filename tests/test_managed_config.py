@@ -70,7 +70,7 @@ def test_codex_profile_follows_provider_sandbox_mode(tmp_path) -> None:
     profile = ensure_managed_config(runtime, tmp_path, None, None)
     document = tomlkit.parse((tmp_path / f"{profile.name}.config.toml").read_text(encoding="utf-8"))
     assert document["approval_policy"] == "on-request"
-    assert document["default_permissions"] == ":workspace-write"
+    assert document["default_permissions"] == ":workspace"
 
 
 def test_codex_profile_rejects_missing_provider_policy(tmp_path) -> None:
@@ -84,6 +84,30 @@ def test_codex_profile_rejects_missing_provider_policy(tmp_path) -> None:
     )
     with pytest.raises(ProviderError, match="approval_policy"):
         ensure_managed_config(runtime, tmp_path, None, None)
+
+
+def test_codex_profile_falls_back_to_settings_policy(tmp_path) -> None:
+    runtime = _runtime(AppKind.CODEX)
+    runtime = type(runtime)(
+        **{
+            **runtime.__dict__,
+            "approval_policy": None,
+            "sandbox_mode": None,
+        }
+    )
+
+    profile = ensure_managed_config(
+        runtime,
+        tmp_path,
+        None,
+        None,
+        approval_policy="on-request",
+        sandbox_mode="workspace-write",
+    )
+    document = tomlkit.parse((tmp_path / f"{profile.name}.config.toml").read_text(encoding="utf-8"))
+
+    assert document["approval_policy"] == "on-request"
+    assert document["default_permissions"] == ":workspace"
 
 
 def test_codex_profile_removes_sandbox_config_and_preserves_project_trust(tmp_path) -> None:
