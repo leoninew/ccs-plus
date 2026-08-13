@@ -42,7 +42,7 @@ Flow mode: standard / 标准模式
 | 路径 | skills / plugins 逐条链接 | 配置表 / MCP 合并 |
 | --- | --- | --- |
 | Codex custom（有 endpoint → managed profile） | 是 | 是：合并进 `ccs-plus-codex-<digest>.config.toml` |
-| Codex direct（无 endpoint，无 managed profile） | 是 | 否（见 Decisions Q2） |
+| Codex direct（无 endpoint，无 managed profile） | 是 | 是：同步用户配置表到隔离 `config.toml` |
 | Claude | 是 | 是：仅同步 `mcpServers` 到 `data/claude/.claude.json` |
 | Grok | 否 | 否 |
 
@@ -97,13 +97,13 @@ Flow mode: standard / 标准模式
 
 - Codex `build_launch_spec`（**custom 与 direct**）后，`data/codex/skills` 与 `data/codex/plugins` 下分别出现指向 `user_home` 对应条目的链接（skills 的 `.system` 除外）；**不存在**指向整个 `user_home` 或整个 `skills/`、`plugins/` 的单一链接；已存在的同名真实条目不被覆盖。
 - Codex **custom** 路径下 managed profile `ccs-plus-codex-<digest>.config.toml` 在每次启动后包含用户白名单表 `mcp_servers`、`plugins`、`marketplaces`、`shell_environment_policy` 的当前内容；用户侧更新这些表后，下次启动 profile 中对应表随之更新。provider 核心字段（`model_provider`、`model`、`approval_policy`、`default_permissions`、`model_providers` 等）仍由 managed 生成逻辑决定，且 `[projects]` 仍按现有规则保留。
-- Codex **direct** 路径：完成 skills/plugins 链接；**不**创建或改写 `data/codex/config.toml` 以合并白名单表。
+- Codex **direct** 路径：完成 skills/plugins 链接，并将用户配置表同步到隔离 `data/codex/config.toml`；不复制整个用户 home。
 - Claude `build_launch_spec` 后，`data/claude/skills` 与 `data/claude/plugins` 下出现指向 `user_home` 对应条目的链接；目录为 junction/symlink，文件为 hardlink → symlink（均失败则跳过并 warning）；同名真实条目不被覆盖；无整目录单一链接。
 - Claude 启动后 `data/claude/.claude.json` 的 `mcpServers` 包含 `~/.claude.json` 中的**全部**用户级服务（用户源为该键下服务名的真相源：同名以用户为准覆盖，隔离侧仅有的服务名保留）；`~/.claude.json` 不被改写；目标文件其他键不被删除或替换。
 - 真实 home、对应子目录或配置文件缺失时静默跳过（no-op）。
 - 链接创建失败、配置文件非法（TOML/JSON）时记录 warning，不阻断启动。
 - 新增 `apps.codex.user_home`（默认 `~/.codex`）与 `apps.claude.user_home`（默认 `~/.claude`）配置；Claude MCP 源固定为 OS 主目录下的 `.claude.json`，不随 `apps.claude.user_home` 变化。settings 测试覆盖默认值与覆盖。
-- 单元测试覆盖：逐条链接创建、`.system` 跳过、同名真实条目跳过、孤立链接清理、Codex 白名单表每次重同步、Claude `mcpServers` 用户源覆盖同名且保留隔离独有服务、home 缺失 no-op、无整目录单一链接、direct 不做配置合并；现有 launch / managed_config / settings 测试仍通过。
+- 单元测试覆盖：逐条链接创建、`.system` 跳过、同名真实条目跳过、孤立链接清理、Codex 白名单表每次重同步、Claude `mcpServers` 用户源覆盖同名且保留隔离独有服务、home 缺失 no-op、无整目录单一链接、direct 同步配置表；现有 launch / managed_config / settings 测试仍通过。
 - README 补充说明本行为（含「链接条目写穿真实 home」与「插件启用依赖配置合并」）。
 
 ## Open questions
@@ -115,7 +115,7 @@ Flow mode: standard / 标准模式
 - 流程模式：standard / 标准（需求 → 计划 → 实现 → 验证）。
 - 可见性策略：能 link 就 link、需要 merge 就 merge、运行 home 不 hybrid 全量共享（见 Strategy）。
 - **Q1（Claude `settings.json`）**：不合并，保持行为配置纯隔离；若实测依赖全局 hooks/permissions，另开需求评估白名单键。
-- **Q2（Codex direct 配置合并）**：本次仅 managed profile（custom）路径合并白名单表；direct 只做 skills/plugins 链接，不写 `data/codex/config.toml`。
+- **Q2（Codex direct 配置合并）**：为保证 official/direct 启动也能使用用户注册的 MCP，direct 同样同步白名单配置表到隔离 `data/codex/config.toml`；provider、认证和其他用户状态仍不复制。
 - 真实用户 home 来源：`apps.codex.user_home`（默认 `~/.codex`）与 `apps.claude.user_home`（默认 `~/.claude`），进 `settings.yaml` 与 settings 层；测试可注入；**不**读取父进程已指向隔离 home 的 `CODEX_HOME` / `CLAUDE_CONFIG_DIR` 作为共享源。
 - Claude MCP 源路径：固定 `Path.home() / ".claude.json"`（OS 用户主目录），**不**随 `apps.claude.user_home` 变化；与 Claude Code 在未设置 `CLAUDE_CONFIG_DIR` 时的默认一致。
 - 链接方式与范围：

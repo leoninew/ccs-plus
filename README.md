@@ -39,7 +39,7 @@ uv run ccs-plus providers list
 | App | 链接 | 配置合并 |
 | --- | --- | --- |
 | Claude | `~/.claude` 下 `skills/`、`plugins/` **逐条**链接进 `apps.claude.home` | OS 主目录 `~/.claude.json` 的 `mcpServers` 同步进隔离 home 的 `.claude.json`（非法 JSON 警告并忽略） |
-| Codex | `~/.codex/sessions` 作为单个目录链接到 `apps.codex.home/sessions`；`skills/`（跳过 `.system`）、`plugins/` **逐条**链接进 `apps.codex.home` | **仅 custom**（有 endpoint）把用户 `config.toml` 的 `mcp_servers` / `plugins` / `marketplaces` / `shell_environment_policy` 写入 managed profile |
+| Codex | `~/.codex/sessions` 作为单个目录链接到 `apps.codex.home/sessions`；`skills/`（跳过 `.system`）、`plugins/` **逐条**链接进 `apps.codex.home` | 把用户 `config.toml` 的 `mcp_servers` / `plugins` / `marketplaces` / `shell_environment_policy` 同步到 custom 的 managed profile 或 official 的隔离 `config.toml`；当前项目已有的信任记录也同步 |
 | Grok | 不链接、不合并 | — |
 
 真实用户 home 默认分别为 `Path.home() / ".claude"` 与 `Path.home() / ".codex"`。一般无需配置；仅在需要时可通过环境变量或 YAML **显式提供**覆盖：
@@ -56,7 +56,7 @@ uv run ccs-plus providers list
 - Codex 仅在 `apps.codex.home/sessions` 不存在时创建指向 `~/.codex/sessions` 的链接；已有 sessions 目录保持不变。
 - `apps.codex.session_model_provider` 决定所有 custom Codex profile 的 `/resume` 筛选身份；请使用非保留
   provider ID，不能设为 `openai`。
-- Codex 插件启用依赖 **config 表合并**；仅有 `plugins/` 目录链接通常不够。
+- Codex 的 MCP、插件启用依赖 **config 表合并**；仅有 `plugins/` 目录链接通常不够。official 和 custom 启动都会同步这些表。
 - 隔离 home 里已有同名**真实**目录/文件时不覆盖；需要链接时请先自行清理该真实条目。
 - 源配置缺失或非法（TOML/JSON）时打印警告并跳过，不阻断启动。
 

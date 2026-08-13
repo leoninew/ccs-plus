@@ -4,11 +4,12 @@ import logging
 import os
 import shutil
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from typing import cast
 
 import portalocker
 import tomlkit
@@ -40,6 +41,7 @@ def ensure_managed_config(
     *,
     user_home: Path | None = None,
     session_model_provider: str | None = None,
+    project_directory: Path | None = None,
 ) -> ManagedProfile:
     if runtime.provider.app is AppKind.CODEX:
         return _ensure_codex_profile(
@@ -48,6 +50,7 @@ def ensure_managed_config(
             model,
             effort,
             user_home=user_home,
+            project_directory=project_directory,
             session_model_provider=_required(
                 session_model_provider,
                 "Codex session_model_provider",
@@ -65,6 +68,7 @@ def _ensure_codex_profile(
     effort: str | None,
     *,
     user_home: Path | None = None,
+    project_directory: Path | None = None,
     session_model_provider: str,
 ) -> ManagedProfile:
     profile = _managed_name(runtime, "codex")
@@ -108,29 +112,112 @@ def _ensure_codex_profile(
         document["model_providers"] = providers
 
         if user_home is not None:
-            _merge_codex_user_tables(document, user_home)
+            _merge_codex_user_tables(document, user_home, project_directory)
 
         _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
     return ManagedProfile(name=profile, env_key=env_key)
 
 
-def _merge_codex_user_tables(document: TOMLDocument, user_home: Path) -> None:
+def _merge_codex_user_tables(
+    document: TOMLDocument,
+    user_home: Path,
+    project_directory: Path | None = None,
+) -> None:
+    user_document = _load_codex_user_config(user_home)
+    if user_document is None:
+        return
+    for key in CODEX_USER_CONFIG_TABLES:
+        if key not in user_document:
+            continue
+        document[key] = deepcopy(user_document[key])
+    _merge_current_project_trust(document, user_document, project_directory)
+
+
+def sync_codex_user_config(
+    state_home: Path,
+    user_home: Path,
+    project_directory: Path | None = None,
+) -> None:
+    """Copy user-owned Codex visibility tables into the isolated base config.
+
+    Custom providers receive these tables in their managed profile. Official
+    providers do not have such a profile, so their base config needs the same
+    visibility layer. Provider, authentication, and unrelated user settings
+    remain isolated in ``state_home``.
+    """
+    user_document = _load_codex_user_config(user_home)
+    if user_document is None:
+        return
+
+    path = state_home / "config.toml"
+    with _locked(path):
+        content = path.read_text(encoding="utf-8") if path.exists() else ""
+        try:
+            document = tomlkit.parse(content) if content else tomlkit.document()
+        except Exception as exc:
+            logger.warning("Skipping Codex user config merge into %s: %s", path, exc)
+            return
+
+        for key in CODEX_USER_CONFIG_TABLES:
+            if key in user_document:
+                document[key] = deepcopy(user_document[key])
+        _merge_current_project_trust(document, user_document, project_directory)
+        _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
+
+
+def _load_codex_user_config(user_home: Path) -> TOMLDocument | None:
     config_path = user_home / "config.toml"
     if not config_path.is_file():
-        return
+        return None
     try:
-        user_document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+        return tomlkit.parse(config_path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning(
             "Skipping Codex user config merge from %s: %s",
             config_path,
             exc,
         )
+        return None
+
+
+def _merge_current_project_trust(
+    document: TOMLDocument,
+    user_document: TOMLDocument,
+    project_directory: Path | None,
+) -> None:
+    if project_directory is None:
         return
-    for key in CODEX_USER_CONFIG_TABLES:
-        if key not in user_document:
+    user_projects = user_document.get("projects")
+    if not isinstance(user_projects, Mapping):
+        return
+
+    matching_key = _project_config_key(user_projects, project_directory)
+    if matching_key is None:
+        return
+
+    projects = document.get("projects")
+    if not isinstance(projects, Mapping):
+        projects = tomlkit.table()
+        document["projects"] = projects
+    projects = cast(MutableMapping[str, object], projects)
+    projects[matching_key] = deepcopy(user_projects[matching_key])
+
+
+def _project_config_key(projects: Mapping[object, object], directory: Path) -> str | None:
+    """Find the trusted project root containing the requested working directory."""
+    current = os.path.normcase(os.path.abspath(os.path.normpath(str(directory))))
+    matches: list[str] = []
+    for key in projects:
+        if not isinstance(key, str):
             continue
-        document[key] = deepcopy(user_document[key])
+        candidate = os.path.normcase(os.path.abspath(os.path.normpath(key)))
+        try:
+            if os.path.commonpath((candidate, current)) == candidate:
+                matches.append(key)
+        except ValueError:
+            # Windows paths on different drives cannot share a project root.
+            continue
+    return max(matches, key=len, default=None)
 
 
 def _permission_profile(sandbox_mode: str) -> str:

@@ -12,7 +12,7 @@ Flow mode: standard / 标准模式
 
 - 稳定隔离 home（`data/*`）不变；**不**做 hybrid 全量共享。
 - Codex / Claude 启动时对 `user_home/skills` 与 `user_home/plugins` **逐条**链接进隔离 home。
-- Codex **custom**（managed profile）路径每次启动将用户 `config.toml` 白名单表写入 profile；**direct** 只链接不合并。
+- Codex **custom**（managed profile）路径每次启动将用户 `config.toml` 白名单表写入 profile；**direct** 同步到隔离 `config.toml`。
 - Claude 每次启动将 OS 主目录 `~/.claude.json` 的 `mcpServers` 同步进 `data/claude/.claude.json`。
 - 不改 Grok；无新 CLI 开关；失败 warning 不阻断启动。
 
@@ -106,7 +106,7 @@ def ensure_managed_config(
 ```
 
 - `launcher._codex_spec` 在 custom 分支传入 `settings.codex.user_home`。
-- direct 分支不调用 `ensure_managed_config`，故自然不合并。
+- direct 分支不调用 `ensure_managed_config`，但调用专用的隔离 base config 同步逻辑。
 
 ### Claude `mcpServers` 同步
 
@@ -151,9 +151,9 @@ build_launch_spec
 5. **测试**：
    - `tests/test_home_visibility.py`（新建）：逐条链接、`.system` 跳过、真实同名不覆盖、孤立链接清理、文件 hardlink/symlink 降级（可用 monkeypatch）、整目录不被单链、mcpServers 合并语义。
    - `tests/test_managed_config.py`：白名单表写入、用户更新后再次 ensure 反映新值、`projects` 仍保留、缺 config.toml 不破坏 profile。
-   - `tests/test_launcher.py`：build_launch_spec 触发链接；Codex direct 有链接无 merge；custom 有 merge；Grok 无链接副作用。
+   - `tests/test_launcher.py`：build_launch_spec 触发链接；Codex direct/custom 都合并配置表；Grok 无链接副作用。
    - `tests/test_settings.py`：`user_home` 默认与 env 覆盖。
-6. **README**：说明默认启用、配置键、链接写穿语义、Codex 插件依赖配置合并、direct 不合并表、Claude MCP 源固定 `~/.claude.json`。
+6. **README**：说明默认启用、配置键、链接写穿语义、Codex 插件依赖配置合并、direct/custom 均同步表、Claude MCP 源固定 `~/.claude.json`。
 7. **质量门**：`make check`、`make test`。
 
 ## Files to Change
@@ -180,7 +180,7 @@ build_launch_spec
 | 单元：链接 | 源 skills 多条目 → 目标逐条链接；`.system` 跳过；真实同名跳过；删除源后下次清理孤立链接；不出现「目标 skills 本身是指向源 skills 的单链接」。 |
 | 单元：文件 | 源 plugins 下 json 文件按 hardlink/symlink 策略进入目标。 |
 | 单元：Codex merge | custom profile 含四张用户表；修改用户 `config.toml` 后再次 ensure 表内容更新；`projects` 保留；provider 核心字段不被用户表覆盖。 |
-| 单元：Codex direct | 无 endpoint 时不写 managed profile、不写 `config.toml`，仍创建 skills/plugins 链接。 |
+| 单元：Codex direct | 无 endpoint 时不写 managed profile，将 MCP 等用户配置表同步到隔离 `config.toml`，并创建 skills/plugins 链接。 |
 | 单元：Claude MCP | 源服务进入目标；同名以源为准；目标独有服务保留；源文件不被改写；目标其他顶层键保留。 |
 | 单元：缺失 | user_home / 子目录 / 配置文件缺失 → 启动仍成功。 |
 | 回归 | 既有 launcher / managed_config / settings / cli 测试通过。 |

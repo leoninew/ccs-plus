@@ -15,7 +15,7 @@ from ccs_plus.domain import (
     validate_launch_options,
 )
 from ccs_plus.home_visibility import apply_claude_visibility, apply_codex_visibility
-from ccs_plus.managed_config import ensure_managed_config
+from ccs_plus.managed_config import ensure_managed_config, sync_codex_user_config
 from ccs_plus.settings import AppSettings, environment_with_defaults
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ def build_launch_spec(
             effort=effort,
             user_home=settings.codex.user_home,
             session_model_provider=settings.codex.session_model_provider,
+            project_directory=working_directory,
         )
     else:
         argv = _grok_spec(executable, runtime, env, state_home, model, effort)
@@ -118,6 +119,7 @@ def _codex_spec(
     effort: str | None,
     user_home: Path | None = None,
     session_model_provider: str | None = None,
+    project_directory: Path | None = None,
 ) -> list[str]:
     _clear(env, "CODEX_HOME", "CODEX_SQLITE_HOME")
     env["CODEX_HOME"] = str(state_home)
@@ -131,11 +133,14 @@ def _codex_spec(
             effort,
             user_home=user_home,
             session_model_provider=session_model_provider,
+            project_directory=project_directory,
         )
         env[profile.env_key] = _required(runtime_provider.api_key, "Codex API key")
         argv.extend(["--profile", profile.name])
         # The profile contains the provider model, reasoning effort, and permission policy.
         return argv
+    if user_home is not None:
+        sync_codex_user_config(state_home, user_home, project_directory)
     if model:
         argv.extend(["--model", model])
     argv.extend(["--ask-for-approval", "never"])

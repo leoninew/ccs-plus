@@ -236,7 +236,7 @@ command = "mks-ttyd"
     assert "mks-ttyd" in profile_text
 
 
-def test_codex_direct_launch_links_without_writing_config(tmp_path, monkeypatch) -> None:
+def test_codex_direct_launch_links_and_merges_config(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
     user_home = tmp_path / "user-codex"
     (user_home / "skills" / "specflow").mkdir(parents=True)
@@ -264,8 +264,79 @@ command = "mks-ttyd"
     app_home = Path(spec.env["CODEX_HOME"])
 
     assert (app_home / "skills" / "specflow").exists()
-    assert not (app_home / "config.toml").exists()
+    document = tomlkit.parse((app_home / "config.toml").read_text(encoding="utf-8"))
+    assert document["mcp_servers"]["mks-ttyd"]["command"] == "mks-ttyd"
     assert not list(app_home.glob("ccs-plus-codex-*.config.toml"))
+
+
+def test_codex_launch_copies_current_project_trust_for_mcp(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+    user_home = tmp_path / "user-codex"
+    user_home.mkdir()
+    (user_home / "config.toml").write_text(
+        f"""
+[projects.'{tmp_path.as_posix()}']
+trust_level = "trusted"
+
+[mcp_servers.demo]
+command = "demo"
+""",
+        encoding="utf-8",
+    )
+    settings = make_app_settings(tmp_path, codex_user_home=user_home)
+    official = Provider(
+        id="codex-official",
+        app=AppKind.CODEX,
+        name="Codex official",
+        settings_config={},
+        endpoints=(),
+        category="official",
+        created_at=None,
+        notes=None,
+        is_current=False,
+    )
+
+    build_launch_spec(official, settings, tmp_path)
+
+    document = tomlkit.parse(
+        (settings.codex.home / "config.toml").read_text(encoding="utf-8")
+    )
+    assert document["projects"][tmp_path.as_posix()]["trust_level"] == "trusted"
+
+
+def test_codex_launch_copies_ancestor_project_trust_for_mcp(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+    project = tmp_path / "repo"
+    working_directory = project / "src"
+    working_directory.mkdir(parents=True)
+    user_home = tmp_path / "user-codex"
+    user_home.mkdir()
+    (user_home / "config.toml").write_text(
+        f"""
+[projects.'{project.as_posix()}']
+trust_level = "trusted"
+""",
+        encoding="utf-8",
+    )
+    settings = make_app_settings(tmp_path, codex_user_home=user_home)
+    official = Provider(
+        id="codex-official",
+        app=AppKind.CODEX,
+        name="Codex official",
+        settings_config={},
+        endpoints=(),
+        category="official",
+        created_at=None,
+        notes=None,
+        is_current=False,
+    )
+
+    build_launch_spec(official, settings, working_directory)
+
+    document = tomlkit.parse(
+        (settings.codex.home / "config.toml").read_text(encoding="utf-8")
+    )
+    assert document["projects"][project.as_posix()]["trust_level"] == "trusted"
 
 
 @pytest.mark.parametrize("app", (AppKind.CODEX, AppKind.GROK))
