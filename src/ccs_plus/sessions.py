@@ -95,9 +95,6 @@ def _parse_codex_session(path: Path, app: AppKind) -> Session | None:
                             payload.get("id") or payload.get("session_id") or session_id
                         )
                         cwd = str(payload.get("cwd") or "")
-                        raw_ts = payload.get("timestamp")
-                        if isinstance(raw_ts, str):
-                            timestamp = _parse_iso(raw_ts) or timestamp
                 elif kind == "response_item" and not title:
                     payload = document.get("payload")
                     if isinstance(payload, dict) and payload.get("role") == "user":
@@ -184,9 +181,6 @@ def _parse_claude_session(path: Path, app: AppKind) -> Session | None:
                     session_id = sid
                 if not cwd and isinstance(document.get("cwd"), str):
                     cwd = document["cwd"]
-                raw_ts = document.get("timestamp")
-                if isinstance(raw_ts, str):
-                    timestamp = _parse_iso(raw_ts) or timestamp
                 if document.get("type") == "user" and not title:
                     message = document.get("message")
                     if isinstance(message, dict):

@@ -14,7 +14,7 @@ from prompt_toolkit.input.defaults import create_pipe_input
 from prompt_toolkit.output import DummyOutput
 
 from ccs_plus.adapters import build_provider
-from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider
+from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider
 from ccs_plus.launch_history import LaunchHistory
 from ccs_plus.tui import APPROVAL_PRESETS, LaunchPlan, run_launcher
 
@@ -92,12 +92,43 @@ def test_launcher_selects_codex_and_permission_preset(tmp_path: Path) -> None:
     assert plan.sandbox_mode == APPROVAL_PRESETS[1].sandbox_mode
 
 
+def test_codex_permission_presets_use_supported_approval_policies() -> None:
+    assert {preset.approval_policy for preset in APPROVAL_PRESETS} <= {
+        "never",
+        "on-request",
+        "on-failure",
+    }
+
+
+def test_launcher_keeps_provider_permissions_without_explicit_override(tmp_path: Path) -> None:
+    provider = _provider(AppKind.CODEX, "Codex P")
+    config = provider.settings_config["config"].replace(
+        'approval_policy = "never"', 'approval_policy = "on-request"'
+    )
+    config = config.replace(
+        'sandbox_mode = "danger-full-access"', 'sandbox_mode = "workspace-write"'
+    )
+    provider = Provider(
+        **{
+            **provider.__dict__,
+            "settings_config": {**provider.settings_config, "config": config},
+        }
+    )
+
+    # app → provider → dir → permissions → sessions → buttons → launch
+    plan = _run(tmp_path, [provider], "\r\r\r\r\r\r")
+
+    assert plan is not None
+    assert plan.approval_policy is None
+    assert plan.sandbox_mode is None
+
+
 def test_launcher_resume_selects_session(tmp_path: Path) -> None:
     import json
 
     provider = _provider(AppKind.CODEX, "Codex P")
     settings = make_app_settings(tmp_path)
-    day = settings.codex.home / "sessions" / "2026" / "08" / "13"
+    day = settings.codex.user_home / "sessions" / "2026" / "08" / "13"
     day.mkdir(parents=True)
     session_cwd = tmp_path / "work"
     session_cwd.mkdir()

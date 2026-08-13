@@ -32,8 +32,9 @@ from prompt_toolkit.styles import Style
 from prompt_toolkit.validation import ValidationError, Validator
 from prompt_toolkit.widgets import Box, Frame, TextArea
 
-from ccs_plus.adapters import display_configuration
-from ccs_plus.domain import AppKind, Provider
+from ccs_plus.adapters import display_configuration, runtime_from_provider
+from ccs_plus.domain import AppKind, Provider, ProviderError
+from ccs_plus.home_visibility import link_codex_sessions
 from ccs_plus.launch_history import LaunchHistory
 from ccs_plus.sessions import Session, list_sessions
 from ccs_plus.settings import AppSettings
@@ -99,11 +100,11 @@ APPROVAL_PRESETS: tuple[ApprovalPreset, ...] = (
         "ask when needed · workspace write",
     ),
     ApprovalPreset(
-        "full-access",
-        "Full access",
-        "full-access",
+        "auto-workspace",
+        "Auto (workspace)",
+        "never",
         "workspace-write",
-        "auto-approve · workspace write",
+        "never ask · workspace write",
     ),
     ApprovalPreset(
         "ask",
@@ -236,7 +237,6 @@ class _LaunchScreen:
 
         self.session_index = 0  # index into filtered session entries (0 = New)
         self.provider_index = 0  # index into filtered providers
-        self.permission_index = self._default_permission_index()
         self.button_index = 0
         self.focus = "app"
         self.status = ""
@@ -275,6 +275,7 @@ class _LaunchScreen:
         )
 
         self._sync_provider_index()
+        self._sync_permission_selection()
         self._build_application()
 
     def run(self) -> LaunchPlan | None:
@@ -297,12 +298,32 @@ class _LaunchScreen:
         return best
 
     def _default_permission_index(self) -> int:
-        policy = self.settings.codex.approval_policy
-        sandbox = self.settings.codex.sandbox_mode
+        policy, sandbox = self._effective_codex_permissions()
         for index, preset in enumerate(APPROVAL_PRESETS):
             if preset.approval_policy == policy and preset.sandbox_mode == sandbox:
                 return index
         return 0
+
+    def _effective_codex_permissions(self) -> tuple[str, str]:
+        policy = self.settings.codex.approval_policy
+        sandbox = self.settings.codex.sandbox_mode
+        provider = self.current_provider
+        if provider is not None and provider.app is AppKind.CODEX:
+            try:
+                runtime = runtime_from_provider(provider)
+            except ProviderError:
+                pass
+            else:
+                policy = runtime.approval_policy or policy
+                sandbox = runtime.sandbox_mode or sandbox
+        return policy, sandbox
+
+    def _sync_permission_selection(self) -> None:
+        if self.current_app is AppKind.CODEX:
+            self.permission_index = self._default_permission_index()
+        else:
+            self.permission_index = 0
+        self.permission_override = False
 
     @property
     def current_app(self) -> AppKind:
@@ -343,6 +364,9 @@ class _LaunchScreen:
     def all_sessions(self) -> list[Session]:
         app = self.current_app
         if app not in self._sessions_cache:
+            if app is AppKind.CODEX:
+                with contextlib.suppress(OSError):
+                    link_codex_sessions(self.settings.codex.home, self.settings.codex.user_home)
             self._sessions_cache[app] = list_sessions(self.settings, app)
         return self._sessions_cache[app]
 
@@ -410,6 +434,7 @@ class _LaunchScreen:
         self._invalidate_provider_filter()
         self._invalidate_session_filter()
         self._sync_provider_index()
+        self._sync_permission_selection()
         self._write_directory(str(self.default_cwd))
         self.status = ""
         self.status_error = False
@@ -521,6 +546,7 @@ class _LaunchScreen:
             self.provider_index = 0
         else:
             self.provider_index = max(0, min(self.provider_index, len(providers) - 1))
+        self._sync_permission_selection()
         self._ensure_provider_visible()
         self._apply_scroll()
 
@@ -609,8 +635,9 @@ class _LaunchScreen:
         sandbox: str | None = None
         if self.current_app is AppKind.CODEX:
             preset = self.current_preset
-            approval = preset.approval_policy
-            sandbox = preset.sandbox_mode
+            if self.permission_override:
+                approval = preset.approval_policy
+                sandbox = preset.sandbox_mode
         self.application.exit(
             result=LaunchPlan(
                 provider=provider,
@@ -943,13 +970,18 @@ class _LaunchScreen:
         providers = self.filtered_providers
         if 0 <= entry < len(providers):
             self.provider_index = entry
+            self._sync_permission_selection()
             self._ensure_provider_visible()
             self._apply_scroll()
 
     def _click_permission(self, row: int) -> None:
         entry = row // _PERMISSION_ROW
         if 0 <= entry < len(APPROVAL_PRESETS):
-            self.permission_index = entry
+            self._set_permission(entry)
+
+    def _set_permission(self, index: int) -> None:
+        self.permission_index = max(0, min(index, len(APPROVAL_PRESETS) - 1))
+        self.permission_override = True
 
     def _click_buttons(self, mouse_event: MouseEvent) -> None:
         if mouse_event.event_type != MouseEventType.MOUSE_UP:
@@ -1123,13 +1155,14 @@ class _LaunchScreen:
         elif self.focus == "provider":
             providers = self.filtered_providers
             if providers:
-                self.provider_index = max(0, min(self.provider_index + delta, len(providers) - 1))
+                next_index = max(0, min(self.provider_index + delta, len(providers) - 1))
+                if next_index != self.provider_index:
+                    self.provider_index = next_index
+                    self._sync_permission_selection()
                 self._ensure_provider_visible()
                 self._apply_scroll()
         elif self.focus == "permissions":
-            self.permission_index = max(
-                0, min(self.permission_index + delta, len(APPROVAL_PRESETS) - 1)
-            )
+            self._set_permission(self.permission_index + delta)
         elif self.focus == "buttons":
             self.button_index = 0 if delta < 0 else 1
 
@@ -1144,12 +1177,14 @@ class _LaunchScreen:
         elif self.focus == "provider":
             providers = self.filtered_providers
             if 0 <= index < len(providers):
-                self.provider_index = index
+                if index != self.provider_index:
+                    self.provider_index = index
+                    self._sync_permission_selection()
                 self._ensure_provider_visible()
                 self._apply_scroll()
         elif self.focus == "permissions":
             if 0 <= index < len(APPROVAL_PRESETS):
-                self.permission_index = index
+                self._set_permission(index)
 
 
 def _relative_time(timestamp: float) -> str:
