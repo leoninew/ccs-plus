@@ -153,6 +153,7 @@ def _claude_runtime(provider: Provider) -> RuntimeProvider:
         model=model,
         effort=_as_string(provider.settings_config.get("effortLevel")),
         claude_env=values,
+        permission_mode=_as_string(provider.settings_config.get("permission_mode")),
     )
 
 
@@ -240,6 +241,8 @@ def _grok_runtime(provider: Provider) -> RuntimeProvider:
         api_key=api_key,
         model=_as_string(_value(model_config.get("model"))) or model_name,
         effort=_as_string(_value(models.get("default_reasoning_effort"))),
+        sandbox_mode=_as_string(_value(document.get("sandbox_mode"))),
+        always_approve=_as_bool(_value(document.get("always_approve"))),
     )
 
 
@@ -283,6 +286,11 @@ def _value(value: object) -> object:
 def _as_string(value: object) -> str | None:
     value = _value(value)
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _as_bool(value: object) -> bool | None:
+    value = _value(value)
+    return value if isinstance(value, bool) else None
 
 
 def _require(value: str | None, label: str) -> str:

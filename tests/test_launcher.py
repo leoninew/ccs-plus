@@ -108,6 +108,86 @@ def test_codex_launch_uses_provider_profile_for_approval_policy(tmp_path, monkey
     assert 'default_permissions = ":workspace-write"' in profile_text
 
 
+def test_launch_uses_settings_permission_defaults_when_provider_omits_them(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-cli")
+    settings = make_app_settings(
+        tmp_path,
+        approval_policy="on-request",
+        sandbox_mode="workspace-write",
+        claude_permission_mode="manual",
+        grok_sandbox_mode="restricted",
+        grok_always_approve=False,
+    )
+
+    claude = _provider(AppKind.CLAUDE)
+    codex = _provider(AppKind.CODEX)
+    codex = Provider(
+        **{
+            **codex.__dict__,
+            "settings_config": {
+                **codex.settings_config,
+                "config": codex.settings_config["config"]
+                .replace('approval_policy = "never"\n', "")
+                .replace('sandbox_mode = "danger-full-access"\n', ""),
+            },
+        }
+    )
+    grok = _provider(AppKind.GROK)
+
+    claude_spec = build_launch_spec(claude, settings, tmp_path)
+    codex_spec = build_launch_spec(codex, settings, tmp_path)
+    grok_spec = build_launch_spec(grok, settings, tmp_path)
+
+    assert claude_spec.argv[-2:] == ("--permission-mode", "manual")
+    profile_name = codex_spec.argv[codex_spec.argv.index("--profile") + 1]
+    profile_text = (Path(codex_spec.env["CODEX_HOME"]) / f"{profile_name}.config.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'approval_policy = "on-request"' in profile_text
+    assert 'default_permissions = ":workspace-write"' in profile_text
+    assert grok_spec.argv[grok_spec.argv.index("--sandbox") + 1] == "restricted"
+    assert "--always-approve" not in grok_spec.argv
+
+
+def test_launch_keeps_provider_permission_settings_over_app_defaults(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-cli")
+    settings = make_app_settings(
+        tmp_path,
+        claude_permission_mode="manual",
+        grok_sandbox_mode="restricted",
+        grok_always_approve=True,
+    )
+    claude = _provider(AppKind.CLAUDE)
+    claude = Provider(
+        **{
+            **claude.__dict__,
+            "settings_config": {**claude.settings_config, "permission_mode": "acceptEdits"},
+        }
+    )
+    grok = _provider(AppKind.GROK)
+    grok = Provider(
+        **{
+            **grok.__dict__,
+            "settings_config": {
+                **grok.settings_config,
+                "config": grok.settings_config["config"].replace(
+                    "[models]",
+                    'sandbox_mode = "workspace"\nalways_approve = false\n\n[models]',
+                ),
+            },
+        }
+    )
+
+    claude_spec = build_launch_spec(claude, settings, tmp_path)
+    grok_spec = build_launch_spec(grok, settings, tmp_path)
+
+    assert claude_spec.argv[-2:] == ("--permission-mode", "acceptEdits")
+    assert grok_spec.argv[grok_spec.argv.index("--sandbox") + 1] == "workspace"
+    assert "--always-approve" not in grok_spec.argv
+
+
 def test_claude_launch_uses_configured_permission_mode(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-claude")
     settings = make_app_settings(tmp_path, claude_permission_mode="manual")

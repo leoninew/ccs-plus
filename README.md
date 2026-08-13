@@ -37,7 +37,7 @@ CCS_PLUS_APPS__CODEX__HOME=data/codex
 uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-对于自定义 provider，三个应用启动时都会读取数据库中所选 provider 的实际 endpoint、API Key、模型和推理强度。官方 provider 不解析自定义配置，使用原生内置配置；官方 Codex 启动时另附加 `--ask-for-approval never`。`apps.claude.permission_mode` 控制 Claude 启动时传入的 `--permission-mode` 值；`apps.grok.sandbox_mode` 和 `apps.grok.always_approve` 控制 Grok 的启动权限。Codex 的 `apps.codex.approval_policy` 和 `sandbox_mode` 只作为新增/导入 provider 时写入的初始策略，之后启动以数据库中该 provider 已保存的实际值为准。
+对于自定义 provider，三个应用启动时都会读取数据库中所选 provider 的实际 endpoint、API Key、模型和推理强度。官方 provider 不解析自定义配置，使用原生内置配置；官方 Codex 启动时另附加 `--ask-for-approval never`。权限属性优先读取 provider 记录：Claude 的 `permission_mode`，Codex 的 `approval_policy` 与 `sandbox_mode`，Grok 的 `sandbox_mode` 与 `always_approve`。某项缺失时，`launch` 回退到对应的 `apps.*` 配置。`apps.codex.approval_policy` 和 `sandbox_mode` 也作为新增/导入 provider 时写入的初始策略。
 
 ## 使用方式
 
@@ -93,9 +93,9 @@ uv run ccs-plus launch grok --provider "<provider-name>" --model "<model-id>"
 
 Claude 和 Codex 启动时会按需让隔离 Home 看见用户的 skills、plugins、MCP 配置；Grok 不同步这些用户资源。不会把整个用户 Home 直接替换为隔离 Home。
 
-对于自定义 provider，启动配置分为两层：连接、模型和推理配置来自数据库中所选 provider 的实际记录；Claude/Grok 的权限选项属于应用级启动配置，来自 `apps.claude` / `apps.grok`。Codex 的权限字段属于 provider 配置：`apps.codex.*` 只在新增或导入时写入初始值，启动不会再次用它们覆盖数据库记录。官方 provider 不解析自定义 provider 配置。当前没有 provider 编辑命令；需要改变已有 Codex provider 的权限策略时，应通过受控方式更新该 provider 的数据库记录，或按当前 `settings.yaml` 重新新增/导入 provider。
+对于自定义 provider，启动配置分为两层：连接、模型和推理配置来自数据库中所选 provider 的实际记录；权限字段也优先使用该记录，缺失时才回退到 `settings.yaml` 中对应应用的配置。Codex 的 `apps.codex.*` 还会在新增或导入时写入初始值。官方 provider 不解析自定义 provider 配置。
 
-Claude 启动器使用 `apps.claude.permission_mode` 配置的权限模式；模板默认值 `bypassPermissions` 等价于跳过权限确认。Grok 启动器使用 `apps.grok.sandbox_mode` 和 `apps.grok.always_approve` 配置沙箱与自动批准行为；模板默认值为 `workspace` 和 `true`。ccs-plus 新增/导入的 Codex provider 默认使用 `danger-full-access`，但启动时以 provider 数据库中的实际权限策略为准。这些高权限行为只应在可信目录和可信 provider 下使用。
+Claude 启动器使用 provider 的 `permission_mode`，缺失时使用 `apps.claude.permission_mode`；模板默认值 `bypassPermissions` 等价于跳过权限确认。Grok 对 `sandbox_mode` 与 `always_approve` 使用相同的 provider 优先、应用级回退规则；模板默认值为 `workspace` 和 `true`。ccs-plus 新增/导入的 Codex provider 默认使用 `danger-full-access`，但缺少权限字段的既有记录会回退到 `apps.codex`。这些高权限行为只应在可信目录和可信 provider 下使用。
 
 ## 开发方式
 

@@ -13,8 +13,8 @@ database:
 encryption_key: ""
 
 # Per-app runtime homes and launch settings.
-# Codex approval/sandbox values are defaults for newly added or imported providers;
-# launch uses the provider record stored in the database for provider-specific settings.
+# Launch uses permission values in a provider record when present; otherwise it falls
+# back to the matching app values below. Codex values also seed newly added/imported providers.
 apps:
   claude:
     home: data/claude

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ccs_plus.adapters import runtime_from_provider
@@ -43,7 +43,7 @@ def build_launch_spec(
     if not executable:
         raise ProviderError(f"{provider.app.executable} CLI was not found on PATH.")
 
-    runtime = runtime_from_provider(provider)
+    runtime = _runtime_with_permission_defaults(runtime_from_provider(provider), settings)
     env = environment_with_defaults()
     state_home = settings.state_home(provider.app.value)
     model = model_override or runtime.model
@@ -59,7 +59,7 @@ def build_launch_spec(
             state_home,
             model,
             effort,
-            settings.claude.permission_mode,
+            _required(runtime.permission_mode, "Claude permission_mode"),
         )
     elif provider.app is AppKind.CODEX:
         apply_codex_visibility(state_home, settings.codex.user_home)
@@ -82,8 +82,8 @@ def build_launch_spec(
             state_home,
             model,
             effort,
-            settings.grok.sandbox_mode,
-            settings.grok.always_approve,
+            _required(runtime.sandbox_mode, "Grok sandbox_mode"),
+            _required_bool(runtime.always_approve, "Grok always_approve"),
         )
     return LaunchSpec(argv=tuple(argv), cwd=working_directory, env=env)
 
@@ -199,8 +199,41 @@ def _custom_runtime(runtime: RuntimeProvider) -> RuntimeProvider | None:
     return runtime
 
 
+def _runtime_with_permission_defaults(
+    runtime: RuntimeProvider,
+    settings: AppSettings,
+) -> RuntimeProvider:
+    """Use app settings only for permission values absent from a provider record."""
+    if runtime.provider.app is AppKind.CLAUDE:
+        return replace(
+            runtime,
+            permission_mode=runtime.permission_mode or settings.claude.permission_mode,
+        )
+    if runtime.provider.app is AppKind.CODEX:
+        return replace(
+            runtime,
+            approval_policy=runtime.approval_policy or settings.codex.approval_policy,
+            sandbox_mode=runtime.sandbox_mode or settings.codex.sandbox_mode,
+        )
+    return replace(
+        runtime,
+        sandbox_mode=runtime.sandbox_mode or settings.grok.sandbox_mode,
+        always_approve=(
+            settings.grok.always_approve
+            if runtime.always_approve is None
+            else runtime.always_approve
+        ),
+    )
+
+
 def _required(value: str | None, label: str) -> str:
     if not value:
+        raise ProviderError(f"{label} is missing from cc-switch settings_config.")
+    return value
+
+
+def _required_bool(value: bool | None, label: str) -> bool:
+    if value is None:
         raise ProviderError(f"{label} is missing from cc-switch settings_config.")
     return value
 

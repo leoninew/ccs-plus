@@ -89,8 +89,10 @@ class RuntimeProvider:
     model: str | None
     effort: str | None
     claude_env: dict[str, str] = field(default_factory=dict)
+    permission_mode: str | None = None
     approval_policy: str | None = None
     sandbox_mode: str | None = None
+    always_approve: bool | None = None
 
 
 @dataclass(frozen=True)
