@@ -149,6 +149,8 @@ def test_launch_verbose_configures_logging_and_does_not_log_api_key(
 def test_no_argument_launch_uses_interactive_selection_and_records_history(
     monkeypatch, tmp_path
 ) -> None:
+    from ccs_plus.tui import LaunchPlan
+
     provider = _provider()
     settings = _settings(tmp_path)
     launched = []
@@ -158,32 +160,52 @@ def test_no_argument_launch_uses_interactive_selection_and_records_history(
             assert database_path == settings.database_path
 
         def list(self, apps):
-            assert apps == [AppKind.CLAUDE]
             return [provider]
 
     monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
     monkeypatch.setattr("ccs_plus.cli.ProviderRepository", Repository)
     monkeypatch.setattr(
         "ccs_plus.cli.build_launch_spec",
-        lambda selected, current_settings, cwd: LaunchSpec(argv=("native-cli",), cwd=cwd, env={}),
+        lambda selected, current_settings, cwd, **kwargs: LaunchSpec(
+            argv=("native-cli",), cwd=cwd, env={}
+        ),
     )
     monkeypatch.setattr("ccs_plus.cli.launch", lambda spec: launched.append(spec) or 0)
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "ccs_plus.cli._run_launcher",
+        lambda settings, providers, history: LaunchPlan(
+            provider=provider,
+            cwd=tmp_path,
+            session=None,
+            approval_policy=None,
+            sandbox_mode=None,
+        ),
+    )
 
-    result = CliRunner().invoke(main, input="1\n1\n\ny\n")
+    result = CliRunner().invoke(main)
 
     assert result.exit_code == 0
-    assert "Start an agent" in result.output
-    assert "Example Provider" in result.output
     assert len(launched) == 1
     history = LaunchHistory.load(tmp_path / "data" / "launch-history.json")
     assert history.default_provider_id(AppKind.CLAUDE, [provider]) == provider.id
 
 
 def test_no_argument_launch_can_be_cancelled(monkeypatch, tmp_path) -> None:
-    monkeypatch.setattr("ccs_plus.cli._settings", lambda: _settings(tmp_path))
+    provider = _provider()
+    settings = _settings(tmp_path)
 
-    result = CliRunner().invoke(main, input="q\n")
+    class Repository:
+        def __init__(self, database_path):
+            pass
+
+        def list(self, apps):
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr("ccs_plus.cli.ProviderRepository", Repository)
+    monkeypatch.setattr("ccs_plus.cli._run_launcher", lambda settings, providers, history: None)
+
+    result = CliRunner().invoke(main)
 
     assert result.exit_code == 0
     assert result.output.count("Cancelled.") == 1

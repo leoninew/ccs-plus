@@ -5,12 +5,12 @@ import logging
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import cast
 
 import click
 from rich.console import Console
 from rich.table import Table
 
+from ccs_plus import tui
 from ccs_plus.adapters import build_provider, display_configuration, runtime_from_provider
 from ccs_plus.database import ProviderRepository
 from ccs_plus.domain import AppKind, NewProvider, Provider, ProviderError, validate_new_provider
@@ -18,6 +18,7 @@ from ccs_plus.launch_history import LaunchHistory
 from ccs_plus.launcher import build_launch_spec, launch
 from ccs_plus.provider_transfer import build_backup_document, parse_backup_document
 from ccs_plus.settings import AppSettings, load_settings
+from ccs_plus.tui import LaunchPlan
 
 logger = logging.getLogger(__name__)
 HELP_CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
@@ -237,110 +238,42 @@ def launch_provider(
 
 
 def _interactive_launch() -> None:
-    """Guide a terminal user through the common provider-launch workflow."""
+    """Open the multi-pane TUI launcher and hand off to the native CLI."""
     try:
         settings = _settings()
         repository = ProviderRepository(settings.database_path)
-        app = _prompt_app()
-        if app is None:
-            return
         history = LaunchHistory.load(_launch_history_path(settings))
-        providers_for_app = repository.list([app])
-        if not providers_for_app:
-            raise ProviderError(f"No {app.value} providers are configured.")
-        providers = history.ordered(app, providers_for_app)
-        provider = _prompt_provider(app, providers, history)
-        if provider is None:
-            return
-        cwd = _prompt_cwd()
-        if cwd is None:
-            return
-        if not click.confirm(f"Launch {app.value} with {provider.name} in {cwd}?", default=True):
+        providers = repository.list(list(AppKind))
+        if not providers:
+            raise ProviderError("No providers are configured.")
+        plan = _run_launcher(settings, providers, history)
+        if plan is None:
             click.echo("Cancelled.")
             return
-        spec = build_launch_spec(provider, settings, cwd)
-        history.record_launch(provider)
-        exit_code = launch(spec)
-        if exit_code:
-            raise click.exceptions.Exit(exit_code)
+        _execute_plan(plan, settings, history)
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc
 
 
-def _prompt_app() -> AppKind | None:
-    click.echo("\nStart an agent")
-    apps = list(AppKind)
-    for index, app in enumerate(apps, start=1):
-        click.echo(f"  {index}. {app.value}")
-    return cast(AppKind | None, _numbered_choice("Agent", apps))
+def _run_launcher(
+    settings: AppSettings, providers: list[Provider], history: LaunchHistory
+) -> LaunchPlan | None:
+    return tui.run_launcher(settings=settings, providers=providers, history=history)
 
 
-def _prompt_provider(
-    app: AppKind, providers: list[Provider], history: LaunchHistory
-) -> Provider | None:
-    default_provider_id = history.default_provider_id(app, providers)
-    default_index = next(
-        (
-            index
-            for index, provider in enumerate(providers, start=1)
-            if provider.id == default_provider_id
-        ),
-        1,
+def _execute_plan(plan: LaunchPlan, settings: AppSettings, history: LaunchHistory) -> None:
+    spec = build_launch_spec(
+        plan.provider,
+        settings,
+        plan.cwd,
+        resume=plan.session,
+        approval_policy=plan.approval_policy,
+        sandbox_mode=plan.sandbox_mode,
     )
-    table = Table(title=f"{app.value} providers (most used first)")
-    table.add_column("#", justify="right")
-    table.add_column("Provider")
-    table.add_column("Model")
-    table.add_column("Uses", justify="right")
-    for index, provider in enumerate(providers, start=1):
-        display = display_configuration(provider)
-        marker = " (last used)" if provider.id == default_provider_id else ""
-        table.add_row(
-            str(index),
-            f"{provider.name}{marker}",
-            display.model or "",
-            str(history.usage(provider).launches),
-        )
-    Console().print(table)
-    return cast(Provider | None, _numbered_choice("Provider", providers, default_index))
-
-
-def _numbered_choice(
-    label: str, choices: list[AppKind] | list[Provider], default: int | None = None
-) -> AppKind | Provider | None:
-    suffix = f" [{default}]" if default is not None else ""
-    while True:
-        value = click.prompt(
-            f"{label} number (q to cancel){suffix}", default="", show_default=False
-        ).strip()
-        if value.lower() in {"q", "quit", "cancel"}:
-            click.echo("Cancelled.")
-            return None
-        if not value and default is not None:
-            return choices[default - 1]
-        try:
-            index = int(value)
-        except ValueError:
-            click.echo(f"Enter a number from 1 to {len(choices)}, or q to cancel.")
-            continue
-        if 1 <= index <= len(choices):
-            return choices[index - 1]
-        click.echo(f"Enter a number from 1 to {len(choices)}, or q to cancel.")
-
-
-def _prompt_cwd() -> Path | None:
-    default = str(Path.cwd())
-    while True:
-        value = click.prompt(
-            "Working directory (q to cancel)", default=default, show_default=False
-        ).strip()
-        if value.lower() in {"q", "quit", "cancel"}:
-            click.echo("Cancelled.")
-            return None
-        directory = Path(value).expanduser().resolve()
-        if directory.is_dir():
-            return directory
-        click.echo(f"Directory does not exist: {directory}")
+    history.record_launch(plan.provider)
+    exit_code = launch(spec)
+    if exit_code:
+        raise click.exceptions.Exit(exit_code)
 
 
 def _launch_history_path(settings: AppSettings) -> Path:

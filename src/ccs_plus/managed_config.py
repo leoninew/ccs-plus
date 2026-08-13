@@ -42,6 +42,8 @@ def ensure_managed_config(
     user_home: Path | None = None,
     session_model_provider: str | None = None,
     project_directory: Path | None = None,
+    approval_policy: str | None = None,
+    sandbox_mode: str | None = None,
 ) -> ManagedProfile:
     if runtime.provider.app is AppKind.CODEX:
         return _ensure_codex_profile(
@@ -55,6 +57,8 @@ def ensure_managed_config(
                 session_model_provider,
                 "Codex session_model_provider",
             ),
+            approval_policy=approval_policy,
+            sandbox_mode=sandbox_mode,
         )
     if runtime.provider.app is AppKind.GROK:
         return _ensure_grok_model(runtime, state_home, model)
@@ -70,13 +74,25 @@ def _ensure_codex_profile(
     user_home: Path | None = None,
     project_directory: Path | None = None,
     session_model_provider: str,
+    approval_policy: str | None = None,
+    sandbox_mode: str | None = None,
 ) -> ManagedProfile:
     profile = _managed_name(runtime, "codex")
     env_key = _managed_env_key(runtime, "CODEX")
     path = state_home / f"{profile}.config.toml"
     marker = _marker(runtime)
-    approval_policy = _required(runtime.approval_policy, "Codex approval_policy")
-    sandbox_mode = _required(runtime.sandbox_mode, "Codex sandbox_mode")
+    # Priority: explicit override (TUI) > provider config > settings default.
+    # ``approval_policy``/``sandbox_mode`` args are treated as overrides when
+    # set; callers that only want a settings fallback should pass them only
+    # when the provider has no policy of its own (see launcher).
+    approval_policy = _required(
+        approval_policy or runtime.approval_policy,
+        "Codex approval_policy",
+    )
+    sandbox_mode = _required(
+        sandbox_mode or runtime.sandbox_mode,
+        "Codex sandbox_mode",
+    )
     with _locked(path):
         content = path.read_text(encoding="utf-8") if path.exists() else ""
         if content and marker not in content:
@@ -221,9 +237,23 @@ def _project_config_key(projects: Mapping[object, object], directory: Path) -> s
 
 
 def _permission_profile(sandbox_mode: str) -> str:
+    """Map legacy sandbox_mode values onto Codex built-in permission profiles.
+
+    Codex accepts built-ins ``:read-only``, ``:workspace``, and
+    ``:danger-full-access``. The historical sandbox key ``workspace-write``
+    maps to ``:workspace``.
+    """
     if sandbox_mode.startswith(":"):
-        return sandbox_mode
-    return f":{sandbox_mode}"
+        name = sandbox_mode[1:]
+    else:
+        name = sandbox_mode
+    aliases = {
+        "workspace-write": "workspace",
+        "workspace_write": "workspace",
+        "read_only": "read-only",
+        "danger_full_access": "danger-full-access",
+    }
+    return f":{aliases.get(name, name)}"
 
 
 def _parse_codex_profile(content: str, path: Path) -> TOMLDocument:
