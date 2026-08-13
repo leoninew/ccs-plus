@@ -76,10 +76,21 @@ def test_launch_specs_keep_secret_out_of_argv_and_use_expected_home(
     expected_home = state_home
     assert spec.env[state_key] == str(expected_home)
     assert spec.cwd == tmp_path.resolve()
+    assert "--effort" not in spec.argv
     if app is AppKind.GROK:
-        assert "--reasoning-effort" in spec.argv
-        assert spec.argv[spec.argv.index("--reasoning-effort") + 1] == "xhigh"
+        profile_name = spec.argv[spec.argv.index("--model") + 1]
+        document = tomlkit.parse(
+            (Path(spec.env["GROK_HOME"]) / "config.toml").read_text(encoding="utf-8")
+        )
+        assert "--reasoning-effort" not in spec.argv
+        assert document["models"]["default_reasoning_effort"] == "xhigh"
+        assert document["model"][profile_name]["model"] == "example-model"
+    if app is AppKind.CLAUDE:
+        assert "--model" not in spec.argv
+        assert spec.env["ANTHROPIC_MODEL"] == "example-model"
+        assert spec.env["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
     if app is AppKind.CODEX:
+        assert "--model" not in spec.argv
         assert "CODEX_SQLITE_HOME" not in spec.env
         assert "--sandbox" not in spec.argv
         assert "--dangerously-bypass-approvals-and-sandbox" not in spec.argv
@@ -286,22 +297,67 @@ def test_launch_uses_current_directory_when_cwd_is_omitted(tmp_path, monkeypatch
     assert spec.cwd == tmp_path.resolve()
 
 
-def test_launch_model_and_effort_overrides_are_transient(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+@pytest.mark.parametrize(
+    ("app", "effort"),
+    [
+        (AppKind.CLAUDE, "low"),
+        (AppKind.CODEX, "minimal"),
+        (AppKind.GROK, "high"),
+    ],
+)
+def test_launch_overrides_provider_model_and_effort_without_native_override_args(
+    tmp_path, monkeypatch, app: AppKind, effort: str
+) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-cli")
 
     spec = build_launch_spec(
-        _provider(AppKind.CODEX),
+        _provider(app),
         _settings(tmp_path),
         tmp_path,
-        model_override="override-model",
-        effort_override="minimal",
+        model_override="one-time-model",
+        effort_override=effort,
     )
 
-    profile_name = spec.argv[spec.argv.index("--profile") + 1]
-    profile = Path(spec.env["CODEX_HOME"]) / f"{profile_name}.config.toml"
-    profile_text = profile.read_text(encoding="utf-8")
-    assert 'model = "override-model"' in profile_text
-    assert 'model_reasoning_effort = "minimal"' in profile_text
+    assert "--effort" not in spec.argv
+    assert "--reasoning-effort" not in spec.argv
+    if app is AppKind.CLAUDE:
+        assert spec.argv == ("native-cli", "--permission-mode", "bypassPermissions")
+        assert spec.env["ANTHROPIC_MODEL"] == "one-time-model"
+        assert spec.env["CLAUDE_CODE_EFFORT_LEVEL"] == effort
+    elif app is AppKind.CODEX:
+        profile_name = spec.argv[spec.argv.index("--profile") + 1]
+        assert spec.argv == ("native-cli", "--profile", profile_name)
+        profile = Path(spec.env["CODEX_HOME"]) / f"{profile_name}.config.toml"
+        profile_text = profile.read_text(encoding="utf-8")
+        assert 'model = "one-time-model"' in profile_text
+        assert f'model_reasoning_effort = "{effort}"' in profile_text
+    else:
+        profile_name = spec.argv[spec.argv.index("--model") + 1]
+        assert spec.argv == (
+            "native-cli",
+            "--model",
+            profile_name,
+            "--sandbox",
+            "workspace",
+            "--always-approve",
+        )
+        document = tomlkit.parse(
+            (Path(spec.env["GROK_HOME"]) / "config.toml").read_text(encoding="utf-8")
+        )
+        assert document["model"][profile_name]["model"] == "one-time-model"
+        assert document["models"]["default_reasoning_effort"] == effort
+
+
+def test_launch_rejects_invalid_codex_effort(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+
+    with pytest.raises(ProviderError, match="Invalid codex effort"):
+        build_launch_spec(
+            _provider(AppKind.CODEX),
+            _settings(tmp_path),
+            tmp_path,
+            effort_override="max",
+        )
 
 
 def test_codex_resume_uses_session_cwd_and_resume_subcommand(tmp_path, monkeypatch) -> None:
@@ -383,17 +439,6 @@ def test_official_claude_does_not_inherit_custom_route(tmp_path, monkeypatch) ->
 
     assert "ANTHROPIC_BASE_URL" not in spec.env
     assert "ANTHROPIC_AUTH_TOKEN" not in spec.env
-
-
-def test_launch_rejects_invalid_codex_effort(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
-    with pytest.raises(ProviderError, match="Invalid codex effort"):
-        build_launch_spec(
-            _provider(AppKind.CODEX),
-            _settings(tmp_path),
-            tmp_path,
-            effort_override="max",
-        )
 
 
 def test_launch_returns_child_exit_code(monkeypatch, tmp_path) -> None:

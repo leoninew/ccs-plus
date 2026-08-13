@@ -307,12 +307,64 @@ context_window = 500000
         encoding="utf-8",
     )
 
-    profile = ensure_managed_config(runtime, tmp_path, None, None)
+    profile = ensure_managed_config(runtime, tmp_path, None, "xhigh")
     content = config_path.read_text(encoding="utf-8")
     document = tomlkit.parse(content)
 
     assert "managed-secret-key" not in content
+    assert f"ccs-plus-managed: grok:{runtime.provider.id}" in content
     assert document["models"]["default"] == "user-model"
+    assert document["models"]["default_reasoning_effort"] == "xhigh"
     assert document["model"][profile.name]["model"] == "example-model"
     assert document["model"][profile.name]["context_window"] == 500_000
     assert (tmp_path / "config.toml.ccs-plus.bak").is_file()
+
+
+def test_grok_config_rejects_unmanaged_profile(tmp_path) -> None:
+    runtime = _runtime(AppKind.GROK)
+    profile = ensure_managed_config(runtime, tmp_path, None, None)
+    (tmp_path / "config.toml").write_text(
+        f"""
+[model.{profile.name}]
+model = "user-owned"
+base_url = "https://user.example.test/v1"
+name = "User"
+env_key = "USER_KEY"
+api_backend = "responses"
+context_window = 500000
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProviderError, match="unmanaged Grok"):
+        ensure_managed_config(runtime, tmp_path, None, None)
+
+
+def test_grok_config_rewrites_profile_after_cli_strips_marker(tmp_path) -> None:
+    runtime = _runtime(AppKind.GROK)
+    profile = ensure_managed_config(runtime, tmp_path, None, None)
+    (tmp_path / "config.toml").write_text(
+        f"""
+[models]
+default = "user-model"
+
+[model.{profile.name}]
+model = "stale-model"
+base_url = "https://stale.example.test/v1"
+name = "Stale"
+env_key = "{profile.env_key}"
+api_backend = "responses"
+context_window = 500000
+""",
+        encoding="utf-8",
+    )
+
+    ensure_managed_config(runtime, tmp_path, "fresh-model", None)
+    content = (tmp_path / "config.toml").read_text(encoding="utf-8")
+    document = tomlkit.parse(content)
+
+    assert f"ccs-plus-managed: grok:{runtime.provider.id}" in content
+    assert document["models"]["default"] == "user-model"
+    assert document["model"][profile.name]["model"] == "fresh-model"
+    assert document["model"][profile.name]["base_url"] == "https://api.example.test/v1"
+    assert document["model"][profile.name]["env_key"] == profile.env_key

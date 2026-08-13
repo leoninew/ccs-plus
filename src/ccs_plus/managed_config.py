@@ -61,7 +61,7 @@ def ensure_managed_config(
             sandbox_mode=sandbox_mode,
         )
     if runtime.provider.app is AppKind.GROK:
-        return _ensure_grok_model(runtime, state_home, model)
+        return _ensure_grok_model(runtime, state_home, model, effort)
     raise ProviderError("Claude does not need a persistent managed configuration.")
 
 
@@ -264,7 +264,7 @@ def _parse_codex_profile(content: str, path: Path) -> TOMLDocument:
 
 
 def _ensure_grok_model(
-    runtime: RuntimeProvider, state_home: Path, model: str | None
+    runtime: RuntimeProvider, state_home: Path, model: str | None, effort: str | None
 ) -> ManagedProfile:
     profile = _managed_name(runtime, "grok")
     env_key = _managed_env_key(runtime, "GROK")
@@ -273,15 +273,26 @@ def _ensure_grok_model(
 
     with _locked(path):
         content = path.read_text(encoding="utf-8") if path.exists() else ""
-        if content and profile in content and marker not in content:
-            raise ProviderError(f"Refusing to overwrite unmanaged Grok model profile: {profile}")
         try:
             document = tomlkit.parse(content) if content else tomlkit.document()
         except Exception as exc:
             raise ProviderError(f"Grok config is invalid TOML: {path}: {exc}") from exc
 
+        if _unmanaged_grok_profile(document, profile, env_key, content, marker):
+            raise ProviderError(f"Refusing to overwrite unmanaged Grok model profile: {profile}")
+
         if marker not in content:
             document.add(tomlkit.comment(marker))
+        models = document.get("models")
+        if models is None:
+            models = tomlkit.table()
+            document["models"] = models
+        if not isinstance(models, MutableMapping):
+            raise ProviderError("Grok models configuration is invalid.")
+        if effort:
+            models["default_reasoning_effort"] = effort
+        else:
+            models.pop("default_reasoning_effort", None)
         model_tables = document.get("model")
         if model_tables is None:
             model_tables = tomlkit.table()
@@ -296,6 +307,28 @@ def _ensure_grok_model(
         model_tables[profile] = target
         _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
     return ManagedProfile(name=profile, env_key=env_key)
+
+
+def _unmanaged_grok_profile(
+    document: TOMLDocument,
+    profile: str,
+    env_key: str,
+    content: str,
+    marker: str,
+) -> bool:
+    """Return True when ``profile`` exists and is not owned by this provider.
+
+    Ownership is the comment marker or a matching ``env_key``. Grok rewrites
+    the shared ``config.toml`` and drops comments, so the marker alone is not
+    a durable claim on a table this process previously wrote.
+    """
+    model_tables = document.get("model")
+    if not isinstance(model_tables, Mapping) or profile not in model_tables:
+        return False
+    if marker in content:
+        return False
+    existing = model_tables.get(profile)
+    return not (isinstance(existing, Mapping) and existing.get("env_key") == env_key)
 
 
 def _managed_name(runtime: RuntimeProvider, suffix: str) -> str:

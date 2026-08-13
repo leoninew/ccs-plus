@@ -69,6 +69,8 @@ def test_launch_help_makes_cwd_optional() -> None:
     result = CliRunner().invoke(main, ["launch", "--help"])
     assert result.exit_code == 0
     assert "--cwd DIRECTORY  [required]" not in result.output
+    assert "--model TEXT" in result.output
+    assert "--effort TEXT" in result.output
     assert "-v, --verbose" in result.output
 
 
@@ -76,6 +78,7 @@ def test_launch_selects_provider_by_name(monkeypatch, tmp_path) -> None:
     provider = _provider()
     settings = _settings(tmp_path)
     selected = []
+    built = []
 
     class Repository:
         def __init__(self, database_path):
@@ -87,21 +90,32 @@ def test_launch_selects_provider_by_name(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
     monkeypatch.setattr("ccs_plus.cli.ProviderRepository", Repository)
-    monkeypatch.setattr(
-        "ccs_plus.cli.build_launch_spec",
-        lambda provider, settings, cwd, model_override, effort_override: LaunchSpec(
-            argv=("native-cli",), cwd=tmp_path, env={}
-        ),
-    )
+    def fake_build_launch_spec(provider, settings, cwd, model_override, effort_override):
+        built.append((provider, settings, cwd, model_override, effort_override))
+        return LaunchSpec(argv=("native-cli",), cwd=tmp_path, env={})
+
+    monkeypatch.setattr("ccs_plus.cli.build_launch_spec", fake_build_launch_spec)
     monkeypatch.setattr("ccs_plus.cli.launch", lambda spec: 0)
 
     result = CliRunner().invoke(
         main,
-        ["launch", "claude", "--provider", provider.name, "--cwd", str(tmp_path)],
+        [
+            "launch",
+            "claude",
+            "--provider",
+            provider.name,
+            "--cwd",
+            str(tmp_path),
+            "--model",
+            "one-time-model",
+            "--effort",
+            "low",
+        ],
     )
 
     assert result.exit_code == 0
     assert selected == [(AppKind.CLAUDE, provider.name)]
+    assert built == [(provider, settings, tmp_path, "one-time-model", "low")]
 
 
 def test_launch_verbose_configures_logging_and_does_not_log_api_key(
@@ -288,6 +302,39 @@ def test_provider_add_does_not_echo_api_key(monkeypatch, tmp_path) -> None:
     config = added[0].settings_config["config"]
     assert 'sandbox_mode = "danger-full-access"' in config
     assert 'approval_policy = "never"' in config
+
+
+def test_provider_add_grok_writes_default_reasoning_effort(monkeypatch, tmp_path) -> None:
+    added = []
+
+    class Repository:
+        def add(self, provider):
+            added.append(provider)
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: _settings(tmp_path))
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(
+        main,
+        [
+            "providers",
+            "add",
+            "grok",
+            "--name",
+            "Grok Provider",
+            "--endpoint",
+            "https://api.example.test/v1",
+            "--api-key",
+            "add-secret-key",
+            "--model",
+            "grok-4.5",
+            "--effort",
+            "xhigh",
+        ],
+    )
+
+    assert result.exit_code == 0
+    config = added[0].settings_config["config"]
+    assert 'default_reasoning_effort = "xhigh"' in config
 
 
 def test_provider_export_writes_default_encrypted_backup(monkeypatch, tmp_path) -> None:

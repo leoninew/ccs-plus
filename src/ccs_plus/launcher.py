@@ -148,16 +148,27 @@ def _claude_spec(
         "ANTHROPIC_DEFAULT_HAIKU_MODEL",
         "ANTHROPIC_DEFAULT_SONNET_MODEL",
         "ANTHROPIC_DEFAULT_OPUS_MODEL",
+        "CLAUDE_CODE_EFFORT_LEVEL",
     )
     runtime_provider = _custom_runtime(runtime)
     if runtime_provider is not None:
         env.update(runtime_provider.claude_env)
+        if model:
+            for key in (
+                "ANTHROPIC_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            ):
+                env[key] = model
+        if effort:
+            env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
     argv = [executable]
     if session_id:
         argv.extend(["--resume", session_id])
-    if model:
+    if runtime_provider is None and model:
         argv.extend(["--model", model])
-    if effort:
+    if runtime_provider is None and effort:
         argv.extend(["--effort", effort])
     argv.extend(["--permission-mode", permission_mode])
     return argv
@@ -203,7 +214,7 @@ def _codex_spec(
         sync_codex_user_config(state_home, user_home, project_directory)
     if model and not session_id:
         argv.extend(["--model", model])
-    argv.extend(["--ask-for-approval", "never"])
+    argv.extend(["--ask-for-approval", _required(runtime.approval_policy, "Codex approval_policy")])
     return argv
 
 
@@ -231,8 +242,6 @@ def _grok_spec(
         argv.extend(["--model", profile.name])
     elif model:
         argv.extend(["--model", model])
-    if effort:
-        argv.extend(["--reasoning-effort", effort])
     argv.extend(["--sandbox", sandbox_mode])
     if always_approve:
         argv.append("--always-approve")

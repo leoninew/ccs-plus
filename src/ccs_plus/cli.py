@@ -203,9 +203,9 @@ def delete_provider(app_name: str, name: str, yes: bool) -> None:
 @click.argument("app_name", type=click.Choice([item.value for item in AppKind]))
 @click.option("--provider", "provider_name", required=True, help="cc-switch provider name.")
 @click.option("--cwd", type=click.Path(path_type=Path, file_okay=False))
-@click.option("--model", "model_override", help="Override the model for this launch only.")
+@click.option("--model", "model_override", help="Override the provider model for this launch.")
 @click.option(
-    "--effort", "effort_override", help="Override the reasoning effort for this launch only."
+    "--effort", "effort_override", help="Override the provider reasoning effort for this launch."
 )
 @click.option("-v", "--verbose", is_flag=True, help="Log launch details to standard error.")
 def launch_provider(

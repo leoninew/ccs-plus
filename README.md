@@ -41,7 +41,7 @@ CCS_PLUS_APPS__CODEX__HOME=data/codex
 uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-对于自定义 provider，三个应用启动时都会读取数据库中所选 provider 的实际 endpoint、API Key、模型和推理强度。官方 provider 不解析自定义配置，使用原生内置配置；官方 Codex 启动时另附加 `--ask-for-approval never`。权限属性优先读取 provider 记录：Claude 的 `permission_mode`，Codex 的 `approval_policy` 与 `sandbox_mode`，Grok 的 `sandbox_mode` 与 `always_approve`。某项缺失时，`launch` 回退到对应的 `apps.*` 配置。`apps.codex.approval_policy` 和 `sandbox_mode` 也作为新增/导入 provider 时写入的初始策略。
+对于自定义 provider，三个应用启动时都会读取数据库中所选 provider 的实际 endpoint、API Key、模型和推理强度。`launch` 的 `--model`、`--effort` 是可选的单次覆盖，不回写 provider；未传时始终使用 provider 配置。官方 provider 不解析自定义配置，使用原生内置配置。权限属性优先读取 provider 记录：Claude 的 `permission_mode`，Codex 的 `approval_policy` 与 `sandbox_mode`，Grok 的 `sandbox_mode` 与 `always_approve`。这些必需权限项在 provider 缺失时才回退到对应的 `apps.*` 配置。`apps.codex.approval_policy` 和 `sandbox_mode` 也作为新增/导入 provider 时写入的初始策略。
 
 ## 使用方式
 
@@ -57,7 +57,8 @@ uv run ccs-plus providers list --app codex --json
 uv run ccs-plus providers add claude `
   --name "<provider-name>" `
   --endpoint "https://api.example.com/v1" `
-  --model "<model-id>"
+  --model "<model-id>" `
+  --effort high
 
 # 查看指定名称的 provider（此命令会输出 API Key）
 uv run ccs-plus providers show "<provider-name>"
@@ -77,8 +78,11 @@ uv run ccs-plus launch claude --provider "<provider-name>"
 # 在指定工作目录启动 Codex；替换为实际目录和 provider 名称
 uv run ccs-plus launch codex --provider "<provider-name>" --cwd "C:\work\project"
 
-# 启动 Grok，并仅为本次运行覆盖模型
-uv run ccs-plus launch grok --provider "<provider-name>" --model "<model-id>"
+# 使用指定 provider 启动 Grok；模型与推理强度默认由 provider 配置决定
+uv run ccs-plus launch grok --provider "<provider-name>"
+
+# 只在本次启动覆盖 provider 的模型和推理强度
+uv run ccs-plus launch grok --provider "<provider-name>" --model "<model-id>" --effort high
 ```
 
 所有命令都支持 `-h` 和 `--help`。provider 按名称选择；同一应用中存在重名时，启动和删除会拒绝执行。官方 provider 不允许删除。
