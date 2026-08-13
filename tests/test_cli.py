@@ -10,6 +10,7 @@ from conftest import make_app_settings
 from ccs_plus.adapters import build_provider
 from ccs_plus.cli import main
 from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider
+from ccs_plus.launch_history import LaunchHistory
 from ccs_plus.launcher import LaunchSpec
 from ccs_plus.settings import AppSettings
 
@@ -143,6 +144,49 @@ def test_launch_verbose_configures_logging_and_does_not_log_api_key(
     ]
     assert "Launching claude with provider" in caplog.text
     assert "cli-secret-key" not in caplog.text
+
+
+def test_no_argument_launch_uses_interactive_selection_and_records_history(
+    monkeypatch, tmp_path
+) -> None:
+    provider = _provider()
+    settings = _settings(tmp_path)
+    launched = []
+
+    class Repository:
+        def __init__(self, database_path):
+            assert database_path == settings.database_path
+
+        def list(self, apps):
+            assert apps == [AppKind.CLAUDE]
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr("ccs_plus.cli.ProviderRepository", Repository)
+    monkeypatch.setattr(
+        "ccs_plus.cli.build_launch_spec",
+        lambda selected, current_settings, cwd: LaunchSpec(argv=("native-cli",), cwd=cwd, env={}),
+    )
+    monkeypatch.setattr("ccs_plus.cli.launch", lambda spec: launched.append(spec) or 0)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, input="1\n1\n\ny\n")
+
+    assert result.exit_code == 0
+    assert "Start an agent" in result.output
+    assert "Example Provider" in result.output
+    assert len(launched) == 1
+    history = LaunchHistory.load(tmp_path / "data" / "launch-history.json")
+    assert history.default_provider_id(AppKind.CLAUDE, [provider]) == provider.id
+
+
+def test_no_argument_launch_can_be_cancelled(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: _settings(tmp_path))
+
+    result = CliRunner().invoke(main, input="q\n")
+
+    assert result.exit_code == 0
+    assert result.output.count("Cancelled.") == 1
 
 
 def test_provider_list_json_does_not_expose_api_key(monkeypatch) -> None:
