@@ -52,7 +52,15 @@ def build_launch_spec(
     if provider.app is AppKind.CLAUDE:
         if settings.claude.user_home is not None:
             apply_claude_visibility(state_home, settings.claude.user_home)
-        argv = _claude_spec(executable, runtime, env, state_home, model, effort)
+        argv = _claude_spec(
+            executable,
+            runtime,
+            env,
+            state_home,
+            model,
+            effort,
+            settings.claude.permission_mode,
+        )
     elif provider.app is AppKind.CODEX:
         apply_codex_visibility(state_home, settings.codex.user_home)
         argv = _codex_spec(
@@ -67,7 +75,16 @@ def build_launch_spec(
             project_directory=working_directory,
         )
     else:
-        argv = _grok_spec(executable, runtime, env, state_home, model, effort)
+        argv = _grok_spec(
+            executable,
+            runtime,
+            env,
+            state_home,
+            model,
+            effort,
+            settings.grok.sandbox_mode,
+            settings.grok.always_approve,
+        )
     return LaunchSpec(argv=tuple(argv), cwd=working_directory, env=env)
 
 
@@ -85,6 +102,7 @@ def _claude_spec(
     state_home: Path,
     model: str | None,
     effort: str | None,
+    permission_mode: str,
 ) -> list[str]:
     _clear(env, "CLAUDE_CONFIG_DIR")
     env["CLAUDE_CONFIG_DIR"] = str(state_home)
@@ -106,7 +124,7 @@ def _claude_spec(
         argv.extend(["--model", model])
     if effort:
         argv.extend(["--effort", effort])
-    argv.append("--dangerously-skip-permissions")
+    argv.extend(["--permission-mode", permission_mode])
     return argv
 
 
@@ -154,6 +172,8 @@ def _grok_spec(
     state_home: Path,
     model: str | None,
     effort: str | None,
+    sandbox_mode: str,
+    always_approve: bool,
 ) -> list[str]:
     _clear(env, "GROK_HOME", "GROK_MODELS_BASE_URL", "GROK_MODELS_LIST_URL")
     env["GROK_HOME"] = str(state_home)
@@ -167,7 +187,9 @@ def _grok_spec(
         argv.extend(["--model", model])
     if effort:
         argv.extend(["--reasoning-effort", effort])
-    argv.extend(["--sandbox", "workspace", "--always-approve"])
+    argv.extend(["--sandbox", sandbox_mode])
+    if always_approve:
+        argv.append("--always-approve")
     return argv
 
 

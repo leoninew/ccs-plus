@@ -11,8 +11,11 @@ from ccs_plus.settings import load_settings
 def test_settings_default_homes_use_local_data(settings_root) -> None:
     settings = load_settings(settings_root)
     assert settings.claude.home == settings_root / "data" / "claude"
+    assert settings.claude.permission_mode == "bypassPermissions"
     assert settings.codex.home == settings_root / "data" / "codex"
     assert settings.codex.session_model_provider == "ccs-plus-managed"
+    assert settings.grok.sandbox_mode == "workspace"
+    assert settings.grok.always_approve is True
     assert settings.grok.home == settings_root / "data" / "grok"
     assert settings.state_home("codex") == settings.codex.home
     # user_home is not in settings.yaml; defaults to Path.home() / ".claude"|".codex"
@@ -34,12 +37,18 @@ def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> No
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__HOME", "custom/codex")
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__USER_HOME", "custom/user-codex")
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__SESSION_MODEL_PROVIDER", "shared-custom")
+    monkeypatch.setenv("CCS_PLUS_APPS__CLAUDE__PERMISSION_MODE", "manual")
+    monkeypatch.setenv("CCS_PLUS_APPS__GROK__SANDBOX_MODE", "restricted")
+    monkeypatch.setenv("CCS_PLUS_APPS__GROK__ALWAYS_APPROVE", "false")
     monkeypatch.setenv("CCS_PLUS_APPS__CLAUDE__USER_HOME", "custom/user-claude")
     monkeypatch.setenv("CCS_PLUS_ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
     settings = load_settings(settings_root)
     assert settings.codex.home == settings_root / "custom" / "codex"
     assert settings.codex.user_home == settings_root / "custom" / "user-codex"
     assert settings.codex.session_model_provider == "shared-custom"
+    assert settings.claude.permission_mode == "manual"
+    assert settings.grok.sandbox_mode == "restricted"
+    assert settings.grok.always_approve is False
     assert settings.claude.user_home == settings_root / "custom" / "user-claude"
     assert settings.encryption_key == "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
@@ -54,6 +63,7 @@ def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None
                 "apps:",
                 "  claude:",
                 "    home: data/claude",
+                "    permission_mode: bypassPermissions",
                 "    user_home: custom/claude-user",
                 "  codex:",
                 "    home: data/codex",
@@ -63,6 +73,8 @@ def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None
                 "    sandbox_mode: danger-full-access",
                 "  grok:",
                 "    home: data/grok",
+                "    sandbox_mode: workspace",
+                "    always_approve: true",
                 "",
             ]
         ),
@@ -106,11 +118,14 @@ def test_settings_rejects_missing_codex_defaults(settings_root) -> None:
                 "apps:",
                 "  claude:",
                 "    home: data/claude",
+                "    permission_mode: bypassPermissions",
                 "  codex:",
                 "    home: data/codex",
                 "    session_model_provider: ccs-plus-managed",
                 "  grok:",
                 "    home: data/grok",
+                "    sandbox_mode: workspace",
+                "    always_approve: true",
                 "",
             ]
         ),

@@ -12,11 +12,13 @@ database:
 # Fernet key for providers export/import. Prefer setting via .env.
 encryption_key: ""
 
-# Per-app runtime homes and defaults for newly added providers.
-# launch always uses the provider record stored in the database.
+# Per-app runtime homes and launch settings.
+# Codex approval/sandbox values are defaults for newly added or imported providers;
+# launch uses the provider record stored in the database for provider-specific settings.
 apps:
   claude:
     home: data/claude
+    permission_mode: bypassPermissions
   codex:
     home: data/codex
     session_model_provider: ccs-plus-managed
@@ -24,3 +26,5 @@ apps:
     sandbox_mode: danger-full-access
   grok:
     home: data/grok
+    sandbox_mode: workspace
+    always_approve: true

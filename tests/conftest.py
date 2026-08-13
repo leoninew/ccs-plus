@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 
 from ccs_plus.domain import CodexAppConfig
-from ccs_plus.settings import AppHomeSettings, AppSettings, CodexSettings
+from ccs_plus.settings import (
+    AppSettings,
+    ClaudeSettings,
+    CodexSettings,
+    GrokSettings,
+)
 
 
 @pytest.fixture()
@@ -64,6 +69,9 @@ def make_app_settings(
     approval_policy: str = "never",
     sandbox_mode: str = "danger-full-access",
     session_model_provider: str = "ccs-plus-managed",
+    claude_permission_mode: str = "bypassPermissions",
+    grok_sandbox_mode: str = "workspace",
+    grok_always_approve: bool = True,
     claude_user_home: Path | None = None,
     codex_user_home: Path | None = None,
 ) -> AppSettings:
@@ -71,9 +79,10 @@ def make_app_settings(
         project_root=root,
         database_path=database_path or (root / "cc-switch.db"),
         encryption_key=encryption_key,
-        claude=AppHomeSettings(
+        claude=ClaudeSettings(
             home=root / "claude",
             user_home=claude_user_home if claude_user_home is not None else root / "user-claude",
+            permission_mode=claude_permission_mode,
         ),
         codex=CodexSettings(
             home=root / "codex",
@@ -82,7 +91,11 @@ def make_app_settings(
             approval_policy=approval_policy,
             sandbox_mode=sandbox_mode,
         ),
-        grok=AppHomeSettings(home=root / "grok"),
+        grok=GrokSettings(
+            home=root / "grok",
+            sandbox_mode=grok_sandbox_mode,
+            always_approve=grok_always_approve,
+        ),
     )
 
 
@@ -104,6 +117,7 @@ def settings_root(tmp_path: Path, database_path: Path) -> Path:
                 "apps:",
                 "  claude:",
                 "    home: data/claude",
+                "    permission_mode: bypassPermissions",
                 "  codex:",
                 "    home: data/codex",
                 "    session_model_provider: ccs-plus-managed",
@@ -111,6 +125,8 @@ def settings_root(tmp_path: Path, database_path: Path) -> Path:
                 "    sandbox_mode: danger-full-access",
                 "  grok:",
                 "    home: data/grok",
+                "    sandbox_mode: workspace",
+                "    always_approve: true",
                 "",
             ]
         ),

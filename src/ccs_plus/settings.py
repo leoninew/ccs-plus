@@ -22,6 +22,21 @@ class AppHomeSettings:
 
 
 @dataclass(frozen=True)
+class ClaudeSettings:
+    home: Path
+    permission_mode: str
+    user_home: Path | None = None
+
+
+@dataclass(frozen=True)
+class GrokSettings:
+    home: Path
+    sandbox_mode: str
+    always_approve: bool
+    user_home: Path | None = None
+
+
+@dataclass(frozen=True)
 class CodexSettings:
     home: Path
     user_home: Path
@@ -41,9 +56,9 @@ class AppSettings:
     project_root: Path
     database_path: Path
     encryption_key: str
-    claude: AppHomeSettings
+    claude: ClaudeSettings
     codex: CodexSettings
-    grok: AppHomeSettings
+    grok: GrokSettings
 
     def state_home(self, app: str) -> Path:
         values = {
@@ -98,6 +113,18 @@ def _resolve_non_empty_string(value: object, key: str) -> str:
     return value.strip()
 
 
+def _resolve_bool(value: object, key: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    raise ProviderError(f"Configuration {key} must be a boolean.")
+
+
 def _get(config: Dynaconf, key: str) -> object:
     return config.get(key)
 
@@ -120,13 +147,17 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
         project_root=root,
         database_path=_resolve_path(root, _get(config, "database.path"), "database.path"),
         encryption_key=_resolve_encryption_key(_get(config, "encryption_key"), "encryption_key"),
-        claude=AppHomeSettings(
+        claude=ClaudeSettings(
             home=_resolve_path(root, _get(config, "apps.claude.home"), "apps.claude.home"),
             user_home=_resolve_optional_user_home(
                 root,
                 _get(config, "apps.claude.user_home"),
                 "apps.claude.user_home",
                 ".claude",
+            ),
+            permission_mode=_resolve_non_empty_string(
+                _get(config, "apps.claude.permission_mode"),
+                "apps.claude.permission_mode",
             ),
         ),
         codex=CodexSettings(
@@ -150,8 +181,16 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
                 "apps.codex.sandbox_mode",
             ),
         ),
-        grok=AppHomeSettings(
+        grok=GrokSettings(
             home=_resolve_path(root, _get(config, "apps.grok.home"), "apps.grok.home"),
+            sandbox_mode=_resolve_non_empty_string(
+                _get(config, "apps.grok.sandbox_mode"),
+                "apps.grok.sandbox_mode",
+            ),
+            always_approve=_resolve_bool(
+                _get(config, "apps.grok.always_approve"),
+                "apps.grok.always_approve",
+            ),
         ),
     )
 

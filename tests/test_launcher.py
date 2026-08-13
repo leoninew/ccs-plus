@@ -45,7 +45,7 @@ def _provider(
 @pytest.mark.parametrize(
     ("app", "required_args"),
     [
-        (AppKind.CLAUDE, ("--dangerously-skip-permissions",)),
+        (AppKind.CLAUDE, ("--permission-mode", "bypassPermissions")),
         (AppKind.CODEX, ("--profile",)),
         (AppKind.GROK, ("--sandbox", "workspace", "--always-approve")),
     ],
@@ -106,6 +106,31 @@ def test_codex_launch_uses_provider_profile_for_approval_policy(tmp_path, monkey
     )
     assert 'approval_policy = "on-request"' in profile_text
     assert 'default_permissions = ":workspace-write"' in profile_text
+
+
+def test_claude_launch_uses_configured_permission_mode(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-claude")
+    settings = make_app_settings(tmp_path, claude_permission_mode="manual")
+
+    spec = build_launch_spec(_provider(AppKind.CLAUDE), settings, tmp_path)
+
+    assert spec.argv[-2:] == ("--permission-mode", "manual")
+    assert "--dangerously-skip-permissions" not in spec.argv
+
+
+def test_grok_launch_uses_configured_permission_settings(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-grok")
+    settings = make_app_settings(
+        tmp_path,
+        grok_sandbox_mode="restricted",
+        grok_always_approve=False,
+    )
+
+    spec = build_launch_spec(_provider(AppKind.GROK), settings, tmp_path)
+
+    assert "--sandbox" in spec.argv
+    assert spec.argv[spec.argv.index("--sandbox") + 1] == "restricted"
+    assert "--always-approve" not in spec.argv
 
 
 def test_codex_launch_profile_contains_no_api_key(tmp_path, monkeypatch) -> None:
@@ -298,9 +323,7 @@ command = "demo"
 
     build_launch_spec(official, settings, tmp_path)
 
-    document = tomlkit.parse(
-        (settings.codex.home / "config.toml").read_text(encoding="utf-8")
-    )
+    document = tomlkit.parse((settings.codex.home / "config.toml").read_text(encoding="utf-8"))
     assert document["projects"][tmp_path.as_posix()]["trust_level"] == "trusted"
 
 
@@ -333,9 +356,7 @@ trust_level = "trusted"
 
     build_launch_spec(official, settings, working_directory)
 
-    document = tomlkit.parse(
-        (settings.codex.home / "config.toml").read_text(encoding="utf-8")
-    )
+    document = tomlkit.parse((settings.codex.home / "config.toml").read_text(encoding="utf-8"))
     assert document["projects"][project.as_posix()]["trust_level"] == "trusted"
 
 
