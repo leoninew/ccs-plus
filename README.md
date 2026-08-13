@@ -1,83 +1,128 @@
 # ccs-plus
 
-管理 cc-switch SQLite 供应商，并使用指定供应商启动 Claude、Codex 或 Grok。三种 CLI 使用稳定的 state home，以保留各自的原生会话历史。
+管理 cc-switch SQLite 中的 Claude、Codex、Grok provider，并使用选定 provider 启动对应的原生 CLI。
 
-## 原生会话历史
-
-同一 app 的供应商使用稳定的运行 home，并共享各自的原生会话历史：
-
-| App | 原生 CLI 运行 home | 唯一会话历史源 |
-| --- | --- | --- |
-| Claude | `apps.claude.home` | `apps.claude.home/projects` |
-| Codex | `apps.codex.home` | `~/.codex/sessions`（由 `apps.codex.home/sessions` 链接）和 `apps.codex.home` SQLite 恢复索引 |
-| Grok | `apps.grok.home` | `apps.grok.home/sessions` |
-
-Codex 以 `CODEX_HOME=apps.codex.home` 启动；启动前仅将
-`apps.codex.home/sessions` 链接到 `~/.codex/sessions`，不会链接或直接使用整个 `~/.codex`。恢复索引
-仍由 Codex 写入 app home。所有 ccs-plus Codex profile 使用 `apps.codex.session_model_provider` 配置的
-同一 custom `model_provider` 身份，因此同一工作目录中供应商 A 创建的会话会出现在供应商 B 的交互式 `/resume`
-列表中。默认值为 `ccs-plus-managed`。`openai` 是 Codex 保留 provider ID，直接 `codex` 的 `openai` 列表
-不能由 custom profile 覆写或合并。endpoint、API Key、模型和权限策略仍由各自的命名 profile 隔离。
+项目只负责 provider 管理、运行配置和 CLI 启动，不实现 cc-switch GUI、本地代理、请求转换或跨 CLI 会话迁移。
 
 ## 快速开始
 
+要求：Python 3.11+、[uv](https://docs.astral.sh/uv/)、cc-switch 数据库，以及已安装并位于 `PATH` 中的 `claude`、`codex` 或 `grok` CLI。
+
 ```powershell
 make install
-uv run ccs-plus providers list
+make release
 ```
 
-`make release` 使用 `pip install -e .` 安装本项目。
+安装完成后，可使用 `ccs-plus --help` 查看命令；确认 `settings.yaml` 和 cc-switch 数据库已配置后，再列出已有 provider：
+
+```bash
+ccs-plus --help
+ccs-plus providers list
+```
+
+也可以使用 `pip install -e .` 安装 editable 版本。
 
 ## 配置
 
-配置文件为项目根 `settings.yaml`（语义分组：`database` / `encryption_key` / `apps`）。可用 `.env` 或 `CCS_PLUS_*` 环境变量覆盖，嵌套键用 `__`（如 `CCS_PLUS_APPS__CODEX__HOME`）。完整示例见 `.env.example`。默认 state home 在项目本地 `data/`，不提交到 Git。`providers add/import` 写入 `apps.codex` 默认策略；`launch` 以数据库中的供应商实际配置为准。
-
-### 启动时 skills / plugins / MCP
-
-`launch` 默认会从真实用户 home 带入可见性资源（无 CLI 开关）：
-
-| App | 链接 | 配置合并 |
-| --- | --- | --- |
-| Claude | `~/.claude` 下 `skills/`、`plugins/` **逐条**链接进 `apps.claude.home` | OS 主目录 `~/.claude.json` 的 `mcpServers` 同步进隔离 home 的 `.claude.json`（非法 JSON 警告并忽略） |
-| Codex | `~/.codex/sessions` 作为单个目录链接到 `apps.codex.home/sessions`；`skills/`（跳过 `.system`）、`plugins/` **逐条**链接进 `apps.codex.home` | 把用户 `config.toml` 的 `mcp_servers` / `plugins` / `marketplaces` / `shell_environment_policy` 同步到 custom 的 managed profile 或 official 的隔离 `config.toml`；当前项目已有的信任记录也同步 |
-| Grok | 不链接、不合并 | — |
-
-真实用户 home 默认分别为 `Path.home() / ".claude"` 与 `Path.home() / ".codex"`。一般无需配置；仅在需要时可通过环境变量或 YAML **显式提供**覆盖：
-
-- `CCS_PLUS_APPS__CLAUDE__USER_HOME` / `apps.claude.user_home`
-- `CCS_PLUS_APPS__CODEX__USER_HOME` / `apps.codex.user_home`
-
-未提供或为空时使用上述默认，不导致启动失败。Claude 用户级 MCP 源始终为 `Path.home() / ".claude.json"`，不随 Claude user home 覆盖变化。
-
-要点：
-
-- **不是**把整个 user home 或整个 `skills/`、`plugins/` 做成单一链接；只链接子条目。
-- 被链接的条目与真实 home 在文件系统上是同一目标：**写入会落到真实 home**。
-- Codex 仅在 `apps.codex.home/sessions` 不存在时创建指向 `~/.codex/sessions` 的链接；已有 sessions 目录保持不变。
-- `apps.codex.session_model_provider` 决定所有 custom Codex profile 的 `/resume` 筛选身份；请使用非保留
-  provider ID，不能设为 `openai`。
-- Codex 的 MCP、插件启用依赖 **config 表合并**；仅有 `plugins/` 目录链接通常不够。official 和 custom 启动都会同步这些表。
-- 隔离 home 里已有同名**真实**目录/文件时不覆盖；需要链接时请先自行清理该真实条目。
-- 源配置缺失或非法（TOML/JSON）时打印警告并跳过，不阻断启动。
-
-## 命令
+项目根目录的 [`settings.yaml`](settings.yaml) 就是配置模板，请直接在该文件中配置。也可以使用 `.env` 或 `CCS_PLUS_*` 环境变量覆盖；嵌套键使用双下划线，例如：
 
 ```text
-ccs-plus providers list [--app claude|codex|grok] [--json]
-ccs-plus providers add <claude|codex|grok> --name <name> --endpoint <url> --model <id>
-ccs-plus providers export [file]
-ccs-plus providers import <file>
-ccs-plus providers reset [--no-dry-run]
-ccs-plus providers show <name>
-ccs-plus providers delete <claude|codex|grok> <name> --yes
-ccs-plus launch <claude|codex|grok> --provider <name> [--cwd <path>]
+CCS_PLUS_DATABASE__PATH=~/.cc-switch/cc-switch.db
+CCS_PLUS_APPS__CODEX__HOME=data/codex
 ```
 
-所有命令均支持 `-h` 和 `--help`。`providers export` 和 `providers import` 从 `CCS_PLUS_ENCRYPTION_KEY` 读取通用 Fernet 加密密钥；在 `.env` 设置实际随机值。省略导出文件名时生成 `data/providers-YYYYMMDD-HHMMSS.json`。`providers show` 会输出已存储的 API Key，请避免在共享终端中使用。
-
-## 开发
+`encryption_key` 用于 provider 导入导出，必须是有效的 Fernet key：由 32 字节密钥编码成 URL-safe Base64 字符串（通常为 44 个字符），不能为空或保留占位值。可用以下命令生成：
 
 ```powershell
-make check
-make test
+uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
+
+对于自定义 provider，三个应用启动时都会读取数据库中所选 provider 的实际 endpoint、API Key、模型和推理强度。官方 provider 不解析自定义配置，使用原生内置配置；官方 Codex 启动时另附加 `--ask-for-approval never`。`apps.claude.permission_mode` 控制 Claude 启动时传入的 `--permission-mode` 值；`apps.grok.sandbox_mode` 和 `apps.grok.always_approve` 控制 Grok 的启动权限。Codex 的 `apps.codex.approval_policy` 和 `sandbox_mode` 只作为新增/导入 provider 时写入的初始策略，之后启动以数据库中该 provider 已保存的实际值为准。
+
+## 使用方式
+
+```powershell
+# 列出所有 provider（默认不显示 API Key）
+uv run ccs-plus providers list
+
+# 只列出 Codex provider，并以 JSON 输出
+uv run ccs-plus providers list --app codex --json
+
+# 新增一个 Claude provider。
+# 将尖括号中的占位符替换为实际值；省略 --api-key 时会隐藏输入。
+uv run ccs-plus providers add claude `
+  --name "<provider-name>" `
+  --endpoint "https://api.example.com/v1" `
+  --model "<model-id>"
+
+# 查看指定名称的 provider（此命令会输出 API Key）
+uv run ccs-plus providers show "<provider-name>"
+
+# 导出全部自定义 provider；默认写入 data/providers-<timestamp>.json
+uv run ccs-plus providers export
+
+# 从加密备份导入 provider；替换为实际备份文件路径
+uv run ccs-plus providers import "data/providers-<timestamp>.json"
+
+# 按应用和名称删除自定义 provider；--yes 是必要的确认参数
+uv run ccs-plus providers delete claude "<provider-name>" --yes
+
+# 使用指定 provider 启动 Claude；provider 名称必须已存在于数据库
+uv run ccs-plus launch claude --provider "<provider-name>"
+
+# 在指定工作目录启动 Codex；替换为实际目录和 provider 名称
+uv run ccs-plus launch codex --provider "<provider-name>" --cwd "C:\work\project"
+
+# 启动 Grok，并仅为本次运行覆盖模型
+uv run ccs-plus launch grok --provider "<provider-name>" --model "<model-id>"
+```
+
+所有命令都支持 `-h` 和 `--help`。provider 按名称选择；同一应用中存在重名时，启动和删除会拒绝执行。官方 provider 不允许删除。
+
+导出文件是 JSON 外壳，API Key 使用 Fernet 加密。持有同一个 Fernet key 的人可以解密备份；不要提交备份文件或密钥。`providers show` 会输出 API Key，只应在可信终端使用。
+
+## 运行模型
+
+每种 CLI 使用配置中的稳定 state home，因此切换 provider 不会替换原生会话目录：
+
+| CLI | 状态目录 | provider 配置方式 |
+| --- | --- | --- |
+| Claude | `apps.claude.home` | 环境变量 + 稳定 `CLAUDE_CONFIG_DIR` |
+| Codex | `apps.codex.home` | provider 独立 managed profile；统一会话 provider 标识 |
+| Grok | `apps.grok.home` | provider 独立 managed model profile |
+
+Claude 和 Codex 启动时会按需让隔离 Home 看见用户的 skills、plugins、MCP 配置；Grok 不同步这些用户资源。不会把整个用户 Home 直接替换为隔离 Home。
+
+对于自定义 provider，启动配置分为两层：连接、模型和推理配置来自数据库中所选 provider 的实际记录；Claude/Grok 的权限选项属于应用级启动配置，来自 `apps.claude` / `apps.grok`。Codex 的权限字段属于 provider 配置：`apps.codex.*` 只在新增或导入时写入初始值，启动不会再次用它们覆盖数据库记录。官方 provider 不解析自定义 provider 配置。当前没有 provider 编辑命令；需要改变已有 Codex provider 的权限策略时，应通过受控方式更新该 provider 的数据库记录，或按当前 `settings.yaml` 重新新增/导入 provider。
+
+Claude 启动器使用 `apps.claude.permission_mode` 配置的权限模式；模板默认值 `bypassPermissions` 等价于跳过权限确认。Grok 启动器使用 `apps.grok.sandbox_mode` 和 `apps.grok.always_approve` 配置沙箱与自动批准行为；模板默认值为 `workspace` 和 `true`。ccs-plus 新增/导入的 Codex provider 默认使用 `danger-full-access`，但启动时以 provider 数据库中的实际权限策略为准。这些高权限行为只应在可信目录和可信 provider 下使用。
+
+## 开发方式
+
+代码位于 `src/ccs_plus`，测试位于 `tests`。主要职责边界如下：
+
+```text
+CLI 编排 → settings / domain → database / adapters → launcher
+                                      ↘ managed_config / home_visibility
+```
+
+- `settings.py`：加载并校验 YAML、`.env` 和环境变量。
+- `domain.py`：provider 数据模型和输入校验。
+- `database.py`：兼容 cc-switch schema 的 SQLite 访问、事务和官方 provider 保护。
+- `adapters.py`：cc-switch JSON/TOML 配置与统一运行时模型之间的转换。
+- `launcher.py`：生成子进程参数和环境，不把 API Key 放进命令行或日志。
+- `managed_config.py`、`home_visibility.py`：维护隔离 Home、managed profile、链接和配置合并。
+
+日常开发循环：
+
+```powershell
+make install       # 安装运行和开发依赖
+make test          # uv run pytest tests
+make check         # ruff 格式化、ruff 检查、mypy
+```
+
+修改 provider 或启动行为时，应同时更新对应测试；测试使用临时 SQLite 和临时 Home，不应连接或修改真实用户数据库。涉及配置语义、CLI 命令或安全边界的变更，更新本 README 的简短说明即可。
+
+## 文档规则
+
+当前规范只有本 README 和 [`docs/README.md`](docs/README.md)。`docs/archive/` 中的内容是历史需求、方案、验证记录和数据库研究，仅用于追溯，不是当前实现的规范；开发时不要引用、修改或据此推断当前行为。
