@@ -62,6 +62,12 @@ STYLE = Style.from_dict(
         "item.focused": "bg:#1f6feb #ffffff bold",
         "item.focused-sub": "bg:#1f6feb #dbeafe",
         "item.muted": "#8b949e",
+        "badge.claude": "bg:#d97706 #0a0e14 bold",
+        "badge.codex": "bg:#10b981 #0a0e14 bold",
+        "badge.grok": "bg:#a855f7 #0a0e14 bold",
+        "badge.claude.focused": "bg:#fbbf24 #0a0e14 bold",
+        "badge.codex.focused": "bg:#34d399 #0a0e14 bold",
+        "badge.grok.focused": "bg:#c084fc #0a0e14 bold",
         "status.ok": "#3fb950 bold",
         "status.err": "#ff7b72 bold",
         "button.launch": "bg:#238636 #ffffff bold",
@@ -634,7 +640,7 @@ class _LaunchScreen:
     def _try_launch(self) -> None:
         provider = self.current_provider
         if provider is None:
-            self.status = f"No matching {self.current_app.value} providers."
+            self.status = f"No matching {self.current_app.display_name} providers."
             self.status_error = True
             return
         session = self.selected_session
@@ -673,11 +679,13 @@ class _LaunchScreen:
         provider = self.current_provider
         name = provider.name if provider else "—"
         mode = "resume" if self.selected_session else "new"
-        app = self.current_app.value
+        app = self.current_app
+        badge_style = f"class:badge.{app.style_key}"
         return [
             ("class:header.brand", " ccs-plus "),
             ("class:header", "▸ "),
-            ("class:header.accent", app),
+            (badge_style, f" {app.badge} "),
+            ("class:header.accent", f" {app.display_name}"),
             ("class:header", f" · {name} · "),
             ("class:header.mode", mode),
             ("class:header", " "),
@@ -897,8 +905,14 @@ class _LaunchScreen:
         focused = self.focus == "app"
         for index, app in enumerate(self.apps):
             selected = index == self.app_index
-            style = self._row_style(focused=focused and selected, selected=selected)
+            row_focused = focused and selected
+            style = self._row_style(focused=row_focused, selected=selected)
             marker = "● " if selected else "○ "
+            badge_style = (
+                f"class:badge.{app.style_key}.focused"
+                if row_focused
+                else f"class:badge.{app.style_key}"
+            )
 
             def handler(mouse_event: MouseEvent, entry: int = index) -> object:
                 if mouse_event.event_type != MouseEventType.MOUSE_DOWN:
@@ -909,7 +923,13 @@ class _LaunchScreen:
                     get_app().invalidate()
                 return None
 
-            lines.append((style, f" {marker}{app.value}\n", handler))
+            lines.extend(
+                [
+                    (style, f" {marker}", handler),
+                    (badge_style, f" {app.badge} ", handler),
+                    (style, f" {app.display_name}\n", handler),
+                ]
+            )
         return lines
 
     def _provider_lines(self) -> StyleAndTextTuples:
