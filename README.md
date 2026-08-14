@@ -47,7 +47,11 @@ uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_
 
 ```powershell
 # 列出所有 provider（默认不显示 API Key）
+# Shortcut 列提供可直接复制的快捷启动命令。
 uv run ccs-plus providers list
+
+# 启动列表中第二个 Codex provider（c=Claude、x=Codex、g=Grok）
+uv run ccs-plus run x2
 
 # 只列出 Codex provider，并以 JSON 输出
 uv run ccs-plus providers list --app codex --json
@@ -85,7 +89,7 @@ uv run ccs-plus launch grok --provider "<provider-name>"
 uv run ccs-plus launch grok --provider "<provider-name>" --model "<model-id>" --effort high
 ```
 
-所有命令都支持 `-h` 和 `--help`。provider 按名称选择；同一应用中存在重名时，启动和删除会拒绝执行。官方 provider 不允许删除。
+所有命令都支持 `-h` 和 `--help`。`Shortcut` 列提供 `ccs-plus run <target>`，例如 `ccs-plus run c1`、`ccs-plus run x2`、`ccs-plus run g1`；编号按当前列表排序、每个应用从 1 开始。provider 按名称选择；同一应用中存在重名时，启动和删除会拒绝执行。官方 provider 不允许删除。
 
 导出文件是 JSON 外壳，API Key 使用 Fernet 加密。持有同一个 Fernet key 的人可以解密备份；不要提交备份文件或密钥。`providers show` 会输出 API Key，只应在可信终端使用。
 

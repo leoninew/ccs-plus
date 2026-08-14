@@ -4,6 +4,7 @@ import json
 import logging
 from dataclasses import replace
 
+import pytest
 from click.testing import CliRunner
 from conftest import make_app_settings
 
@@ -17,15 +18,15 @@ from ccs_plus.settings import AppSettings
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
 
 
-def _provider():
+def _provider(app: AppKind = AppKind.CLAUDE, name: str = "Example Provider") -> Provider:
     return build_provider(
         NewProvider(
-            app=AppKind.CLAUDE,
-            name="Example Provider",
+            app=app,
+            name=name,
             endpoint="https://api.example.test/v1",
             api_key="cli-secret-key",
             model="example-model",
-            effort="high",
+            effort="xhigh" if app is AppKind.GROK else "high",
             notes=None,
         ),
         _CODEX,
@@ -41,6 +42,7 @@ def test_help_exposes_provider_and_launch_commands() -> None:
     assert result.exit_code == 0
     assert "providers" in result.output
     assert "launch" in result.output
+    assert "run" in result.output
 
 
 def test_short_help_option_matches_long_help_for_every_command() -> None:
@@ -56,6 +58,7 @@ def test_short_help_option_matches_long_help_for_every_command() -> None:
         ("providers", "show"),
         ("providers", "delete"),
         ("launch",),
+        ("run",),
     )
     for command in commands:
         short_help = runner.invoke(main, [*command, "-h"])
@@ -90,6 +93,7 @@ def test_launch_selects_provider_by_name(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
     monkeypatch.setattr("ccs_plus.cli.ProviderRepository", Repository)
+
     def fake_build_launch_spec(provider, settings, cwd, model_override, effort_override):
         built.append((provider, settings, cwd, model_override, effort_override))
         return LaunchSpec(argv=("native-cli",), cwd=tmp_path, env={})
@@ -116,6 +120,68 @@ def test_launch_selects_provider_by_name(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
     assert selected == [(AppKind.CLAUDE, provider.name)]
     assert built == [(provider, settings, tmp_path, "one-time-model", "low")]
+
+
+def test_run_selects_provider_by_list_number(monkeypatch, tmp_path) -> None:
+    first = _provider(AppKind.CODEX, "First Codex")
+    second = _provider(AppKind.CODEX, "Second Codex")
+    settings = _settings(tmp_path)
+    built = []
+
+    class Repository:
+        def __init__(self, database_path):
+            assert database_path == settings.database_path
+
+        def list(self, apps):
+            assert apps == [AppKind.CODEX]
+            return [first, second]
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr("ccs_plus.cli.ProviderRepository", Repository)
+
+    def fake_build_launch_spec(provider, current_settings, cwd, model_override, effort_override):
+        built.append((provider, current_settings, cwd, model_override, effort_override))
+        return LaunchSpec(argv=("native-cli",), cwd=tmp_path, env={})
+
+    monkeypatch.setattr("ccs_plus.cli.build_launch_spec", fake_build_launch_spec)
+    monkeypatch.setattr("ccs_plus.cli.launch", lambda spec: 0)
+
+    result = CliRunner().invoke(main, ["run", "X2"])
+
+    assert result.exit_code == 0
+    assert built == [(second, settings, None, None, None)]
+
+
+@pytest.mark.parametrize("target", ("codex1", "c0", "x", "z1"))
+def test_run_rejects_invalid_target(target: str) -> None:
+    result = CliRunner().invoke(main, ["run", target])
+
+    assert result.exit_code != 0
+    assert "Run target must be c, x, or g" in result.output
+
+
+def test_run_rejects_unknown_list_number(monkeypatch, tmp_path) -> None:
+    settings = _settings(tmp_path)
+
+    class Repository:
+        def __init__(self, database_path):
+            assert database_path == settings.database_path
+
+        def list(self, apps):
+            assert apps == [AppKind.GROK]
+            return []
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr("ccs_plus.cli.ProviderRepository", Repository)
+    monkeypatch.setattr(
+        "ccs_plus.cli.build_launch_spec",
+        lambda *args: (_ for _ in ()).throw(AssertionError("run must not launch")),
+    )
+
+    result = CliRunner().invoke(main, ["run", "g1"])
+
+    assert result.exit_code != 0
+    assert "Provider number 1 does not exist for grok" in result.output
 
 
 def test_launch_verbose_configures_logging_and_does_not_log_api_key(
@@ -241,6 +307,35 @@ def test_provider_list_json_does_not_expose_api_key(monkeypatch) -> None:
     assert "https://stale.example.test/v1" not in result.output
     assert '"reasoning_effort": "high"' in result.output
     assert '"is_current"' not in result.output
+    record = json.loads(result.output)[0]
+    assert record["shortcut"] == "ccs-plus run c1"
+    assert "number" not in record
+    assert "run" not in record
+
+
+def test_provider_list_numbers_each_app_from_one(monkeypatch) -> None:
+    records = [
+        _provider(AppKind.CLAUDE, "Claude 1"),
+        _provider(AppKind.CLAUDE, "Claude 2"),
+        _provider(AppKind.CODEX, "Codex 1"),
+        _provider(AppKind.GROK, "Grok 1"),
+    ]
+
+    class Repository:
+        def list(self, apps):
+            assert apps == list(AppKind)
+            return records
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(main, ["providers", "list", "--json"])
+
+    assert result.exit_code == 0
+    assert [record["shortcut"] for record in json.loads(result.output)] == [
+        "ccs-plus run c1",
+        "ccs-plus run c2",
+        "ccs-plus run x1",
+        "ccs-plus run g1",
+    ]
 
 
 def test_provider_list_falls_back_to_endpoint_candidates(monkeypatch) -> None:

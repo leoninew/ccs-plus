@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +24,27 @@ from ccs_plus.tui import LaunchPlan
 
 logger = logging.getLogger(__name__)
 HELP_CONTEXT_SETTINGS = {"help_option_names": ["-h", "--help"]}
+RUN_APP_PREFIXES = {
+    "c": AppKind.CLAUDE,
+    "x": AppKind.CODEX,
+    "g": AppKind.GROK,
+}
+RUN_PREFIXES = {app: prefix for prefix, app in RUN_APP_PREFIXES.items()}
+RUN_SELECTOR = re.compile(r"(?P<app>[cxg])(?P<number>[1-9][0-9]*)", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class ProviderListEntry:
+    provider: Provider
+    number: int
+
+    @property
+    def run_target(self) -> str:
+        return f"{RUN_PREFIXES[self.provider.app]}{self.number}"
+
+    @property
+    def shortcut(self) -> str:
+        return f"ccs-plus run {self.run_target}"
 
 
 def _settings() -> AppSettings:
@@ -59,15 +82,16 @@ def list_providers(app_name: str | None, as_json: bool) -> None:
     try:
         apps = [_app(app_name)] if app_name else list(AppKind)
         records = _repository().list(apps)
+        entries = _numbered_provider_entries(records)
         if as_json:
             click.echo(
                 json.dumps(
-                    [_provider_display_record(provider) for provider in records],
+                    [_provider_display_record(entry) for entry in entries],
                     ensure_ascii=False,
                 )
             )
             return
-        _render_providers(records)
+        _render_providers(entries)
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -223,14 +247,29 @@ def launch_provider(
         app = _app(app_name)
         settings = _settings()
         provider = ProviderRepository(settings.database_path).get_by_name(app, provider_name)
-        spec = build_launch_spec(provider, settings, cwd, model_override, effort_override)
-        logger.info(
-            "Launching %s with provider %r in %s",
-            app.value,
-            provider.name,
-            spec.cwd,
+        exit_code = _launch_selected_provider(
+            provider,
+            settings,
+            cwd,
+            model_override,
+            effort_override,
         )
-        exit_code = launch(spec)
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+    except ProviderError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+@main.command("run", context_settings=HELP_CONTEXT_SETTINGS)
+@click.argument("target")
+def run_provider(target: str) -> None:
+    """Launch a provider listed as c1, x1, or g1."""
+    try:
+        app, number = _parse_run_target(target)
+        settings = _settings()
+        records = ProviderRepository(settings.database_path).list([app])
+        provider = _provider_at_number(app, number, _numbered_provider_entries(records))
+        exit_code = _launch_selected_provider(provider, settings, None, None, None)
         if exit_code:
             raise click.exceptions.Exit(exit_code)
     except ProviderError as exc:
@@ -274,6 +313,23 @@ def _execute_plan(plan: LaunchPlan, settings: AppSettings, history: LaunchHistor
     exit_code = launch(spec)
     if exit_code:
         raise click.exceptions.Exit(exit_code)
+
+
+def _launch_selected_provider(
+    provider: Provider,
+    settings: AppSettings,
+    cwd: Path | None,
+    model_override: str | None,
+    effort_override: str | None,
+) -> int:
+    spec = build_launch_spec(provider, settings, cwd, model_override, effort_override)
+    logger.info(
+        "Launching %s with provider %r in %s",
+        provider.app.value,
+        provider.name,
+        spec.cwd,
+    )
+    return launch(spec)
 
 
 def _launch_history_path(settings: AppSettings) -> Path:
@@ -331,13 +387,44 @@ def _validate_import_names(values: list[NewProvider], existing: list[Provider]) 
         raise ProviderError(f"Providers already exist: {', '.join(conflicts)}")
 
 
+def _numbered_provider_entries(records: list[Provider]) -> list[ProviderListEntry]:
+    numbers: dict[AppKind, int] = {}
+    entries: list[ProviderListEntry] = []
+    for provider in records:
+        number = numbers.get(provider.app, 0) + 1
+        numbers[provider.app] = number
+        entries.append(ProviderListEntry(provider=provider, number=number))
+    return entries
+
+
+def _parse_run_target(value: str) -> tuple[AppKind, int]:
+    match = RUN_SELECTOR.fullmatch(value.strip())
+    if match is None:
+        raise ProviderError(
+            "Run target must be c, x, or g followed by a positive provider number "
+            "(for example: x1)."
+        )
+    return RUN_APP_PREFIXES[match["app"].lower()], int(match["number"])
+
+
+def _provider_at_number(app: AppKind, number: int, entries: list[ProviderListEntry]) -> Provider:
+    for entry in entries:
+        if entry.provider.app is app and entry.number == number:
+            return entry.provider
+    raise ProviderError(
+        f"Provider number {number} does not exist for {app.value}. "
+        f"Run 'ccs-plus providers list --app {app.value}' to see available providers."
+    )
+
+
 def _render_providers(
-    records: list[Provider], console_factory: Callable[[], Console] = Console
+    entries: list[ProviderListEntry], console_factory: Callable[[], Console] = Console
 ) -> None:
     table = Table(title="cc-switch providers")
-    for heading in ("App", "Name", "Endpoint", "Model", "Reasoning", "Category"):
+    for heading in ("App", "Name", "Endpoint", "Model", "Reasoning", "Category", "Shortcut"):
         table.add_column(heading, overflow="fold")
-    for provider in records:
+    for entry in entries:
+        provider = entry.provider
         display = display_configuration(provider)
         endpoint = display.endpoint or (provider.endpoints[0] if provider.endpoints else "")
         category = provider.category or "custom"
@@ -350,13 +437,16 @@ def _render_providers(
             display.model or "",
             display.effort or "",
             category,
+            entry.shortcut,
         )
     console_factory().print(table)
 
 
-def _provider_display_record(provider: Provider) -> dict[str, object]:
+def _provider_display_record(entry: ProviderListEntry) -> dict[str, object]:
+    provider = entry.provider
     display = display_configuration(provider)
     return {
+        "shortcut": entry.shortcut,
         "app": provider.app.value,
         "name": provider.name,
         "endpoint": display.endpoint or (provider.endpoints[0] if provider.endpoints else None),
