@@ -161,7 +161,8 @@ def test_launcher_resume_selects_session(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     history = LaunchHistory.load(tmp_path / "history.json")
-    # app → provider → dir → permissions → sessions → down → buttons → launch
+    # app → provider → dir → permissions → sessions → down (resume) → launch
+    # Directory pane hides after a session is selected; cwd comes from session.
     keys = "\r\r\r\r\x1b[B\r\r"
     plan = _drive(
         lambda: run_launcher(

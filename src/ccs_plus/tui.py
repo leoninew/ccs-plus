@@ -10,11 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from prompt_toolkit.application import Application
+from prompt_toolkit.application.current import get_app
 from prompt_toolkit.completion import PathCompleter
 from prompt_toolkit.document import Document
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import FormattedText, StyleAndTextTuples
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.key_binding.key_processor import KeyPressEvent
 from prompt_toolkit.layout import (
     ConditionalContainer,
     FormattedTextControl,
@@ -26,11 +28,10 @@ from prompt_toolkit.layout import (
 )
 from prompt_toolkit.layout.containers import FloatContainer
 from prompt_toolkit.layout.dimension import Dimension as D
-from prompt_toolkit.layout.margins import ScrollbarMargin
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.validation import ValidationError, Validator
-from prompt_toolkit.widgets import Box, Frame, TextArea
+from prompt_toolkit.widgets import Box, TextArea
 
 from ccs_plus.adapters import display_configuration, runtime_from_provider
 from ccs_plus.domain import AppKind, Provider, ProviderError
@@ -52,8 +53,10 @@ STYLE = Style.from_dict(
         "footer.filter": "bg:#010409 #ffa657 bold",
         "frame.border": "#30363d",
         "frame.label": "#8b949e",
-        "frame.active.border": "#58a6ff",
+        "frame.active.border": "#58a6ff bold",
         "frame.active.label": "#58a6ff bold",
+        "frame.scroll": "#8b949e",
+        "frame.active.scroll": "#58a6ff bold",
         "item": "#c9d1d9",
         "item.selected": "bg:#21262d #f0f6fc bold",
         "item.focused": "bg:#1f6feb #ffffff bold",
@@ -158,7 +161,7 @@ class _ExistingDirectoryValidator(Validator):
 
 
 class _ScrollListControl(FormattedTextControl):
-    """Non-focusable list: mouse click/scroll only; keys handled at app level."""
+    """List control: app-level keys; mouse click + wheel handled here."""
 
     def __init__(
         self,
@@ -168,27 +171,44 @@ class _ScrollListControl(FormattedTextControl):
         on_scroll: Callable[[int], None],
         on_activate: Callable[[], None],
     ) -> None:
-        # focusable=False so prompt_toolkit never steals ↑↓ from app bindings.
-        super().__init__(get_text, focusable=False, show_cursor=False, modal=False)
+        # focusable=True so the window reliably receives mouse wheel events.
+        # Arrow keys are still handled by eager app-level bindings.
+        super().__init__(get_text, focusable=True, show_cursor=False, modal=False)
         self._on_click_row = on_click_row
         self._on_scroll = on_scroll
         self._on_activate = on_activate
 
-    def mouse_handler(self, mouse_event: MouseEvent) -> None:
+    def mouse_handler(self, mouse_event: MouseEvent) -> object:
+        # Prefer MOUSE_DOWN for selection: changing focus on down would otherwise
+        # drop the matching MOUSE_UP on another control.
         event = mouse_event.event_type
-        if event == MouseEventType.MOUSE_UP:
-            self._on_activate()
-            self._on_click_row(mouse_event.position.y)
-            return None
         if event == MouseEventType.SCROLL_UP:
             self._on_activate()
             self._on_scroll(-1)
+            with contextlib.suppress(Exception):
+                get_app().invalidate()
             return None
         if event == MouseEventType.SCROLL_DOWN:
             self._on_activate()
             self._on_scroll(1)
+            with contextlib.suppress(Exception):
+                get_app().invalidate()
             return None
-        return None
+        if event == MouseEventType.MOUSE_DOWN:
+            # Fragment-level handlers (3-tuples) are dispatched by the base class.
+            result = super().mouse_handler(mouse_event)
+            if result is not NotImplemented:
+                return result
+            # Fallback: map y → row for plain 2-tuple lines.
+            self._on_activate()
+            self._on_click_row(mouse_event.position.y)
+            with contextlib.suppress(Exception):
+                get_app().invalidate()
+            return None
+        # Consume UP so Window default handlers don't steal it.
+        if event == MouseEventType.MOUSE_UP:
+            return None
+        return NotImplemented
 
 
 def _fuzzy_match(query: str, *parts: str) -> bool:
@@ -197,7 +217,6 @@ def _fuzzy_match(query: str, *parts: str) -> bool:
     if not needle:
         return True
     hay = " ".join(parts).casefold()
-    # Prefer simple substring; fall back to subsequence.
     if needle in hay.replace(" ", ""):
         return True
     if needle in hay:
@@ -235,8 +254,8 @@ class _LaunchScreen:
         if last_app is not None and last_app in self.apps:
             self.app_index = self.apps.index(last_app)
 
-        self.session_index = 0  # index into filtered session entries (0 = New)
-        self.provider_index = 0  # index into filtered providers
+        self.session_index = 0
+        self.provider_index = 0
         self.button_index = 0
         self.focus = "app"
         self.status = ""
@@ -248,7 +267,7 @@ class _LaunchScreen:
         self._session_scroll = 0
         self.provider_filter = ""
         self.session_filter = ""
-        self.filter_mode = False  # typing into provider/session filter
+        self.filter_mode = False
 
         self.dir_area = TextArea(
             text=str(default_cwd),
@@ -257,19 +276,16 @@ class _LaunchScreen:
             validator=_ExistingDirectoryValidator(),
             style="class:text-area",
             height=1,
-            read_only=Condition(lambda: self.selected_session is not None),
-            # Enter is handled by the app-level binding only (avoid double advance).
-            focusable=Condition(lambda: self.focus == "dir" and not self.filter_mode),
+            focusable=Condition(
+                lambda: (
+                    self.selected_session is None and self.focus == "dir" and not self.filter_mode
+                )
+            ),
         )
         self.dir_buffer = self.dir_area.buffer
 
-        # Stable dummy focus target so list panes never need PT focus.
         self._focus_sink = Window(
-            content=FormattedTextControl(
-                lambda: "",
-                focusable=True,
-                show_cursor=False,
-            ),
+            content=FormattedTextControl("", focusable=True, show_cursor=False),
             height=0,
             dont_extend_height=True,
         )
@@ -439,34 +455,30 @@ class _LaunchScreen:
         self.status = ""
         self.status_error = False
         if self.focus == "permissions" and self.current_app is not AppKind.CODEX:
-            self.focus = "dir"
-        self._apply_scroll()
+            self.focus = "dir" if self.selected_session is None else "provider"
+        if self.focus == "dir" and self.selected_session is not None:
+            self.focus = "sessions"
+        self._ensure_provider_visible()
+        self._ensure_session_visible()
         self._sync_layout_focus()
 
     def _set_session(self, index: int) -> None:
         max_index = max(0, self._session_entry_count() - 1)
         self.session_index = max(0, min(index, max_index))
-        # Do NOT touch the directory TextArea on every arrow key — PathCompleter
-        # + validator make that path extremely expensive with large session lists.
+        if self.selected_session is not None and self.focus == "dir":
+            self.focus = "sessions"
+            self._sync_layout_focus()
         self._ensure_session_visible()
-        self._apply_scroll()
-
-    def _sync_directory_from_selection(self) -> None:
-        """Apply selected session cwd (or default) into the directory field once."""
-        session = self.selected_session
-        if session is not None and session.cwd:
-            self._write_directory(session.cwd)
-        elif self.session_index == 0:
-            self._write_directory(str(self.default_cwd))
 
     def _write_directory(self, text: str) -> None:
         if self.dir_buffer.text == text:
             return
-        # Buffer may be read-only while a session is selected; bypass that guard.
         self.dir_buffer.set_document(Document(text, len(text)), bypass_readonly=True)
 
     def _focus_order(self) -> list[str]:
-        order = ["app", "provider", "dir"]
+        order = ["app", "provider"]
+        if self.selected_session is None:
+            order.append("dir")
         if self.current_app is AppKind.CODEX:
             order.append("permissions")
         order.extend(["sessions", "buttons"])
@@ -476,55 +488,73 @@ class _LaunchScreen:
         order = self._focus_order()
         if pane not in order:
             pane = order[0]
-        previous = self.focus
         if pane not in {"provider", "sessions"}:
             self.filter_mode = False
-        if previous == "sessions" and pane != "sessions":
-            self._sync_directory_from_selection()
         self.focus = pane
         self._sync_layout_focus()
 
     def _move_focus(self, delta: int) -> None:
         self.filter_mode = False
         order = self._focus_order()
-        previous = self.focus
         if self.focus not in order:
             self.focus = order[0]
         else:
             index = order.index(self.focus)
             self.focus = order[(index + delta) % len(order)]
-        if previous == "sessions" and self.focus != "sessions":
-            self._sync_directory_from_selection()
         self._sync_layout_focus()
 
     def _sync_layout_focus(self) -> None:
-        """Only the directory field needs real PT focus; lists use a sink."""
-        if self.focus == "dir" and not self.filter_mode:
+        if self.focus == "dir" and self.selected_session is None and not self.filter_mode:
             with contextlib.suppress(Exception):
                 self.application.layout.focus(self.dir_area)
             return
+        target = {
+            "app": getattr(self, "_app_window", None),
+            "provider": getattr(self, "_provider_window", None),
+            "permissions": getattr(self, "_permission_window", None),
+            "sessions": getattr(self, "_sessions_window", None),
+            "buttons": getattr(self, "_buttons_window", None),
+        }.get(self.focus)
+        if target is not None:
+            with contextlib.suppress(Exception):
+                self.application.layout.focus(target)
+                return
         with contextlib.suppress(Exception):
             self.application.layout.focus(self._focus_sink)
 
+    def _provider_capacity(self) -> int:
+        return max(
+            1,
+            self._visible_lines(getattr(self, "_provider_window", None), default=8)
+            // _PROVIDER_ROW,
+        )
+
+    def _session_capacity(self) -> int:
+        return max(
+            1,
+            self._visible_lines(getattr(self, "_sessions_window", None), default=16)
+            // _SESSION_ROW,
+        )
+
     def _ensure_provider_visible(self) -> None:
-        top = self._provider_scroll
-        visible = self._visible_lines(getattr(self, "_provider_window", None), default=8)
-        entries = max(1, visible // _PROVIDER_ROW)
-        if self.provider_index < top:
+        count = len(self.filtered_providers)
+        capacity = self._provider_capacity()
+        max_scroll = max(0, count - capacity)
+        if self.provider_index < self._provider_scroll:
             self._provider_scroll = self.provider_index
-        elif self.provider_index >= top + entries:
-            self._provider_scroll = self.provider_index - entries + 1
-        self._provider_scroll = max(0, self._provider_scroll)
+        elif self.provider_index >= self._provider_scroll + capacity:
+            self._provider_scroll = self.provider_index - capacity + 1
+        self._provider_scroll = max(0, min(self._provider_scroll, max_scroll))
 
     def _ensure_session_visible(self) -> None:
-        top = self._session_scroll
-        visible = self._visible_lines(getattr(self, "_sessions_window", None), default=16)
-        entries = max(1, visible // _SESSION_ROW)
-        if self.session_index < top:
+        count = self._session_entry_count()
+        capacity = self._session_capacity()
+        max_scroll = max(0, count - capacity)
+        if self.session_index < self._session_scroll:
             self._session_scroll = self.session_index
-        elif self.session_index >= top + entries:
-            self._session_scroll = self.session_index - entries + 1
-        self._session_scroll = max(0, self._session_scroll)
+        elif self.session_index >= self._session_scroll + capacity:
+            self._session_scroll = self.session_index - capacity + 1
+        self._session_scroll = max(0, min(self._session_scroll, max_scroll))
 
     def _visible_lines(self, window: Window | None, *, default: int) -> int:
         if window is None:
@@ -534,12 +564,6 @@ class _LaunchScreen:
             return default
         return max(1, info.window_height)
 
-    def _apply_scroll(self) -> None:
-        if getattr(self, "_provider_window", None) is not None:
-            self._provider_window.vertical_scroll = self._provider_scroll * _PROVIDER_ROW
-        if getattr(self, "_sessions_window", None) is not None:
-            self._sessions_window.vertical_scroll = self._session_scroll * _SESSION_ROW
-
     def _clamp_provider_index(self) -> None:
         providers = self.filtered_providers
         if not providers:
@@ -548,13 +572,11 @@ class _LaunchScreen:
             self.provider_index = max(0, min(self.provider_index, len(providers) - 1))
         self._sync_permission_selection()
         self._ensure_provider_visible()
-        self._apply_scroll()
 
     def _clamp_session_index(self) -> None:
         max_index = max(0, self._session_entry_count() - 1)
         self.session_index = max(0, min(self.session_index, max_index))
         self._ensure_session_visible()
-        self._apply_scroll()
 
     # --- filter -------------------------------------------------------
 
@@ -617,11 +639,9 @@ class _LaunchScreen:
             self.status = f"No matching {self.current_app.value} providers."
             self.status_error = True
             return
-        # Flush session → directory once at launch time (not on every keypress).
-        self._sync_directory_from_selection()
         session = self.selected_session
         if session is not None:
-            cwd_text = session.cwd or self.dir_buffer.text.strip()
+            cwd_text = session.cwd or str(self.default_cwd)
         else:
             cwd_text = self.dir_buffer.text.strip() or str(self.default_cwd)
         path = Path(cwd_text).expanduser()
@@ -629,7 +649,8 @@ class _LaunchScreen:
         if not path.is_dir():
             self.status = f"Directory does not exist: {path}"
             self.status_error = True
-            self._set_focus("dir")
+            if session is None:
+                self._set_focus("dir")
             return
         approval: str | None = None
         sandbox: str | None = None
@@ -694,20 +715,129 @@ class _LaunchScreen:
             parts.extend([("class:footer", "│ "), (style, f"{self.status} ")])
         return parts
 
-    def _frame_title(self, pane: str, label: str) -> Any:
+    def _pane_border_style(self, pane: str) -> str:
+        return "class:frame.active.border" if self.focus == pane else "class:frame.border"
+
+    def _pane_label_style(self, pane: str) -> str:
+        return "class:frame.active.label" if self.focus == pane else "class:frame.label"
+
+    def _pane_title_text(self, pane: str, label: str) -> str:
         filt = ""
         if pane == "provider" and self.provider_filter:
             filt = f" /{self.provider_filter}"
         elif pane == "sessions" and self.session_filter:
             filt = f" /{self.session_filter}"
         if self.focus == pane:
-            marker = "▶ "
-            suffix = " · filtering" if self.filter_mode and pane in {"provider", "sessions"} else ""
-            return [("class:frame.active.label", f" {marker}{label}{filt}{suffix} ")]
-        return [("class:frame.label", f" {label}{filt} ")]
+            suffix = " · filter" if self.filter_mode and pane in {"provider", "sessions"} else ""
+            return f" ▶ {label}{filt}{suffix} "
+        return f" {label}{filt} "
 
-    def _frame_style(self, pane: str) -> str:
-        return "class:frame.active" if self.focus == pane else "class:frame"
+    def _window_width(self, pane: str, default: int = 40) -> int:
+        win = {
+            "app": getattr(self, "_app_window", None),
+            "provider": getattr(self, "_provider_window", None),
+            "permissions": getattr(self, "_permission_window", None),
+            "sessions": getattr(self, "_sessions_window", None),
+        }.get(pane)
+        info = getattr(win, "render_info", None) if win is not None else None
+        if info is not None:
+            return max(12, info.window_width + 2)
+        return default
+
+    def _highlighted_frame(self, body: Any, pane: str, label: str) -> Any:
+        """Stable frame tree: body stays put so mouse hit-testing keeps working.
+
+        Only border glyphs/styles are recomputed each paint via FormattedTextControl
+        callables. DynamicContainer must NOT wrap the body — rebuilding the tree
+        every frame drops mouse handlers.
+        """
+
+        def top_text() -> StyleAndTextTuples:
+            border = self._pane_border_style(pane)
+            label_style = self._pane_label_style(pane)
+            title = self._pane_title_text(pane, label)
+            if self.focus == pane:
+                tl, tr, h = "╔", "╗", "═"
+            else:
+                tl, tr, h = "┌", "┐", "─"
+            width = self._window_width(pane)
+            inner = max(0, width - 2)
+            title_text = title if len(title) <= inner else title[: max(0, inner - 1)] + "…"
+            pad = max(0, inner - len(title_text))
+            left_pad = 1 if pad else 0
+            right_pad = max(0, pad - left_pad)
+            return [
+                (border, tl + h * left_pad),
+                (label_style, title_text),
+                (border, h * right_pad + tr),
+            ]
+
+        def bottom_text() -> StyleAndTextTuples:
+            border = self._pane_border_style(pane)
+            bl, br, h = ("╚", "╝", "═") if self.focus == pane else ("└", "┘", "─")
+            width = self._window_width(pane)
+            return [(border, bl + h * max(0, width - 2) + br)]
+
+        def vert_text() -> StyleAndTextTuples:
+            border = self._pane_border_style(pane)
+            glyph = "║" if self.focus == pane else "│"
+            # Enough lines to fill tall panes; Window clips to its height.
+            height = 80
+            win = {
+                "app": getattr(self, "_app_window", None),
+                "provider": getattr(self, "_provider_window", None),
+                "permissions": getattr(self, "_permission_window", None),
+                "sessions": getattr(self, "_sessions_window", None),
+            }.get(pane)
+            info = getattr(win, "render_info", None) if win is not None else None
+            if info is not None:
+                height = max(1, info.window_height)
+            return [(border, (glyph + "\n") * height)]
+
+        top = Window(
+            FormattedTextControl(top_text, focusable=False, show_cursor=False),
+            height=1,
+            dont_extend_height=True,
+        )
+        bottom = Window(
+            FormattedTextControl(bottom_text, focusable=False, show_cursor=False),
+            height=1,
+            dont_extend_height=True,
+        )
+        left = Window(
+            FormattedTextControl(vert_text, focusable=False, show_cursor=False),
+            width=1,
+            dont_extend_width=True,
+        )
+        right = Window(
+            FormattedTextControl(vert_text, focusable=False, show_cursor=False),
+            width=1,
+            dont_extend_width=True,
+        )
+        return HSplit([top, VSplit([left, body, right]), bottom], style="class:frame")
+
+    def _append_entry(
+        self,
+        lines: StyleAndTextTuples,
+        *,
+        focused: bool,
+        selected: bool,
+        title: str,
+        subtitle: str,
+        mouse_handler: Callable[[MouseEvent], object] | None = None,
+    ) -> None:
+        style = self._row_style(focused=focused and selected, selected=selected)
+        sub_style = "class:item.focused-sub" if focused and selected else "class:item.muted"
+        marker = "▸ " if selected else "  "
+        title_text = f"{marker}{title}\n"
+        sub_text = f"    {subtitle}\n"
+        if mouse_handler is None:
+            lines.append((style, title_text))
+            lines.append((sub_style, sub_text))
+        else:
+            # 3-tuple fragments register per-cell mouse handlers in FormattedTextControl.
+            lines.append((style, title_text, mouse_handler))  # type: ignore[arg-type]
+            lines.append((sub_style, sub_text, mouse_handler))  # type: ignore[arg-type]
 
     def _session_lines(self) -> StyleAndTextTuples:
         lines: StyleAndTextTuples = []
@@ -720,14 +850,47 @@ class _LaunchScreen:
             entries.append((-2, "(no matches)", f"filter: {self.session_filter}"))
         elif len(entries) == 1:
             entries.append((-2, "(no sessions)", "launch first to populate"))
+
+        # Windowed render only — prevents highlight overflow past the pane.
+        capacity = self._session_capacity()
+        start = max(0, min(self._session_scroll, max(0, len(entries) - 1)))
+        end = min(len(entries), start + capacity)
         focused = self.focus == "sessions"
-        for row, (key, title, subtitle) in enumerate(entries):
+        for row in range(start, end):
+            key, title, subtitle = entries[row]
             selected = row == self.session_index if key != -2 else False
-            style = self._row_style(focused=focused and selected, selected=selected)
-            sub_style = "class:item.focused-sub" if focused and selected else "class:item.muted"
-            marker = "▸ " if selected else "  "
-            lines.append((style, f"{marker}{title}\n"))
-            lines.append((sub_style, f"    {subtitle}\n"))
+            absolute = row  # already absolute index into entries
+
+            def handler(
+                mouse_event: MouseEvent, entry: int = absolute, selectable: int = key
+            ) -> object:
+                if mouse_event.event_type != MouseEventType.MOUSE_DOWN:
+                    return None
+                if selectable == -2:
+                    self._set_focus("sessions")
+                    return None
+                self._set_focus("sessions")
+                self._set_session(entry)
+                with contextlib.suppress(Exception):
+                    get_app().invalidate()
+                return None
+
+            self._append_entry(
+                lines,
+                focused=focused,
+                selected=selected,
+                title=title,
+                subtitle=subtitle,
+                mouse_handler=handler,
+            )
+        selectable = len([e for e in entries if e[0] != -2]) or len(entries)
+        if selectable > capacity:
+            lines.append(
+                (
+                    "class:frame.active.scroll" if focused else "class:frame.scroll",
+                    f"  ↕ {start + 1}-{end}/{selectable}\n",
+                )
+            )
         return lines
 
     def _app_lines(self) -> StyleAndTextTuples:
@@ -737,7 +900,17 @@ class _LaunchScreen:
             selected = index == self.app_index
             style = self._row_style(focused=focused and selected, selected=selected)
             marker = "● " if selected else "○ "
-            lines.append((style, f" {marker}{app.value}\n"))
+
+            def handler(mouse_event: MouseEvent, entry: int = index) -> object:
+                if mouse_event.event_type != MouseEventType.MOUSE_DOWN:
+                    return None
+                self._set_focus("app")
+                self._set_app(entry)
+                with contextlib.suppress(Exception):
+                    get_app().invalidate()
+                return None
+
+            lines.append((style, f" {marker}{app.value}\n", handler))  # type: ignore[arg-type]
         return lines
 
     def _provider_lines(self) -> StyleAndTextTuples:
@@ -753,17 +926,43 @@ class _LaunchScreen:
             lines.append(("class:item.muted", f"  {msg}\n"))
             return lines
         default_id = self.history.default_provider_id(self.current_app, self.all_app_providers)
-        for index, provider in enumerate(providers):
+        capacity = self._provider_capacity()
+        start = max(0, min(self._provider_scroll, max(0, len(providers) - 1)))
+        end = min(len(providers), start + capacity)
+        for index in range(start, end):
+            provider = providers[index]
             selected = index == self.provider_index
-            style = self._row_style(focused=focused and selected, selected=selected)
-            sub_style = "class:item.focused-sub" if focused and selected else "class:item.muted"
             display = display_configuration(provider)
             model = display.model or "no model"
             uses = self.history.usage(provider).launches
             mark = " · last" if provider.id == default_id else ""
-            marker = "▸ " if selected else "  "
-            lines.append((style, f"{marker}{provider.name}{mark}\n"))
-            lines.append((sub_style, f"    {model} · {uses} use{'s' if uses != 1 else ''}\n"))
+
+            def handler(mouse_event: MouseEvent, entry: int = index) -> object:
+                if mouse_event.event_type != MouseEventType.MOUSE_DOWN:
+                    return None
+                self._set_focus("provider")
+                self.provider_index = entry
+                self._sync_permission_selection()
+                self._ensure_provider_visible()
+                with contextlib.suppress(Exception):
+                    get_app().invalidate()
+                return None
+
+            self._append_entry(
+                lines,
+                focused=focused,
+                selected=selected,
+                title=f"{provider.name}{mark}",
+                subtitle=f"{model} · {uses} use{'s' if uses != 1 else ''}",
+                mouse_handler=handler,
+            )
+        if len(providers) > capacity:
+            lines.append(
+                (
+                    "class:frame.active.scroll" if focused else "class:frame.scroll",
+                    f"  ↕ {start + 1}-{end}/{len(providers)}\n",
+                )
+            )
         return lines
 
     def _permission_lines(self) -> StyleAndTextTuples:
@@ -774,8 +973,18 @@ class _LaunchScreen:
             style = self._row_style(focused=focused and selected, selected=selected)
             sub_style = "class:item.focused-sub" if focused and selected else "class:item.muted"
             marker = "● " if selected else "○ "
-            lines.append((style, f" {marker}{preset.label}\n"))
-            lines.append((sub_style, f"    {preset.description}\n"))
+
+            def handler(mouse_event: MouseEvent, entry: int = index) -> object:
+                if mouse_event.event_type != MouseEventType.MOUSE_DOWN:
+                    return None
+                self._set_focus("permissions")
+                self._set_permission(entry)
+                with contextlib.suppress(Exception):
+                    get_app().invalidate()
+                return None
+
+            lines.append((style, f" {marker}{preset.label}\n", handler))  # type: ignore[arg-type]
+            lines.append((sub_style, f"    {preset.description}\n", handler))  # type: ignore[arg-type]
         return lines
 
     def _button_text(self) -> StyleAndTextTuples:
@@ -845,16 +1054,45 @@ class _LaunchScreen:
             on_scroll=lambda d: self._navigate(d),
         )
 
-        screen = self
+        def button_fragments() -> StyleAndTextTuples:
+            focused = self.focus == "buttons"
+            launch = (
+                "class:button.launch.focused"
+                if focused and self.button_index == 0
+                else "class:button.launch"
+            )
+            cancel = (
+                "class:button.cancel.focused"
+                if focused and self.button_index == 1
+                else "class:button.cancel"
+            )
 
-        class _ClickableButtons(FormattedTextControl):
-            def mouse_handler(self, mouse_event: MouseEvent) -> None:
-                screen._click_buttons(mouse_event)
+            def launch_handler(mouse_event: MouseEvent) -> object:
+                if mouse_event.event_type != MouseEventType.MOUSE_DOWN:
+                    return None
+                self._set_focus("buttons")
+                self.button_index = 0
+                self._try_launch()
                 return None
 
-        button_control = _ClickableButtons(
-            lambda: FormattedText(self._button_text()),
-            focusable=False,
+            def cancel_handler(mouse_event: MouseEvent) -> object:
+                if mouse_event.event_type != MouseEventType.MOUSE_DOWN:
+                    return None
+                self._set_focus("buttons")
+                self.button_index = 1
+                self._cancel()
+                return None
+
+            return [
+                (launch, "  ▶ Launch  ", launch_handler),  # type: ignore[list-item]
+                ("", "   "),
+                (cancel, "  ✕ Cancel  ", cancel_handler),  # type: ignore[list-item]
+                ("", "\n"),
+            ]
+
+        button_control = FormattedTextControl(
+            button_fragments,
+            focusable=True,
             show_cursor=False,
         )
 
@@ -862,8 +1100,7 @@ class _LaunchScreen:
             content=session_control,
             wrap_lines=False,
             always_hide_cursor=True,
-            right_margins=[ScrollbarMargin(display_arrows=True)],
-            allow_scroll_beyond_bottom=True,
+            height=D(preferred=20, min=6),
         )
         self._app_window = Window(
             content=app_control, height=D(min=3, max=5), always_hide_cursor=True
@@ -872,41 +1109,26 @@ class _LaunchScreen:
             content=provider_control,
             wrap_lines=False,
             always_hide_cursor=True,
-            right_margins=[ScrollbarMargin(display_arrows=True)],
             height=D(preferred=10, min=4),
-            allow_scroll_beyond_bottom=True,
         )
         self._permission_window = Window(
             content=permission_control,
             height=D(min=6, max=10),
             always_hide_cursor=True,
         )
+        self._dir_window = Box(self.dir_area, padding_left=1, padding_right=1, height=1)
         self._buttons_window = Window(content=button_control, height=2, always_hide_cursor=True)
 
-        # Static frames (stable focus). Titles/styles update via callables.
         left = HSplit(
             [
-                Frame(
-                    self._app_window,
-                    title=lambda: self._frame_title("app", "app"),
-                    style="class:frame",
-                ),
-                Frame(
-                    self._provider_window,
-                    title=lambda: self._frame_title("provider", "provider"),
-                    style="class:frame",
-                ),
-                Frame(
-                    Box(self.dir_area, padding_left=1, padding_right=1, height=1),
-                    title=lambda: self._frame_title("dir", "directory"),
-                    style="class:frame",
+                self._highlighted_frame(self._app_window, "app", "app"),
+                self._highlighted_frame(self._provider_window, "provider", "provider"),
+                ConditionalContainer(
+                    self._highlighted_frame(self._dir_window, "dir", "directory"),
+                    filter=Condition(lambda: self.selected_session is None),
                 ),
                 ConditionalContainer(
-                    Frame(
-                        self._permission_window,
-                        title=lambda: self._frame_title("permissions", "permissions"),
-                        style="class:frame",
-                    ),
+                    self._highlighted_frame(self._permission_window, "permissions", "permissions"),
                     filter=Condition(lambda: self.current_app is AppKind.CODEX),
                 ),
                 Box(self._buttons_window, padding=1),
@@ -914,14 +1136,7 @@ class _LaunchScreen:
             padding=0,
             width=D(min=34, preferred=42),
         )
-
-        # Active pane border: wrap each side with a style-switching outer window
-        # is hard; use title marker + list row highlight instead (stable).
-        sessions_frame = Frame(
-            self._sessions_window,
-            title=lambda: self._frame_title("sessions", "sessions"),
-            style="class:frame",
-        )
+        sessions_frame = self._highlighted_frame(self._sessions_window, "sessions", "sessions")
         body = VSplit([left, sessions_frame], padding=1)
 
         root = HSplit(
@@ -946,7 +1161,7 @@ class _LaunchScreen:
         container: FloatContainer = FloatContainer(content=root, floats=[])
         bindings = self._key_bindings()
         self.application: Application[LaunchPlan | None] = Application(
-            layout=Layout(container, focused_element=self._focus_sink),
+            layout=Layout(container, focused_element=self._app_window),
             key_bindings=bindings,
             style=STYLE,
             mouse_support=True,
@@ -956,6 +1171,7 @@ class _LaunchScreen:
     # --- mouse handlers -----------------------------------------------
 
     def _click_session(self, row: int) -> None:
+        # Windowed list: row is relative to the visible window, not absolute.
         entry = self._session_scroll + row // _SESSION_ROW
         max_index = self._session_entry_count() - 1
         if 0 <= entry <= max_index:
@@ -972,7 +1188,6 @@ class _LaunchScreen:
             self.provider_index = entry
             self._sync_permission_selection()
             self._ensure_provider_visible()
-            self._apply_scroll()
 
     def _click_permission(self, row: int) -> None:
         entry = row // _PERMISSION_ROW
@@ -982,18 +1197,6 @@ class _LaunchScreen:
     def _set_permission(self, index: int) -> None:
         self.permission_index = max(0, min(index, len(APPROVAL_PRESETS) - 1))
         self.permission_override = True
-
-    def _click_buttons(self, mouse_event: MouseEvent) -> None:
-        if mouse_event.event_type != MouseEventType.MOUSE_UP:
-            return None
-        self._set_focus("buttons")
-        if mouse_event.position.x < 14:
-            self.button_index = 0
-            self._try_launch()
-        else:
-            self.button_index = 1
-            self._cancel()
-        return None
 
     def _scroll_sessions(self, delta: int) -> None:
         self._set_focus("sessions")
@@ -1107,37 +1310,35 @@ class _LaunchScreen:
         def _clear(event: Any) -> None:
             self._set_active_filter("")
 
-        # Printable characters while filtering.
-        @bindings.add("<any>", filter=filtering, eager=True)
-        def _any_filter(event: Any) -> None:
-            data = event.data
-            if data and data.isprintable() and data not in "\r\n\t":
-                self._filter_append(data)
-
-        # Also allow typing to start filter when on provider/sessions (no slash).
         typing_start = Condition(
-            lambda: (
-                not self.filter_mode
-                and self.focus in {"provider", "sessions"}
-                and self.focus != "dir"
-            )
+            lambda: not self.filter_mode and self.focus in {"provider", "sessions"}
         )
 
-        @bindings.add("<any>", filter=typing_start, eager=True)
-        def _any_start(event: Any) -> None:
-            data = event.data
-            if not data or not data.isprintable() or data in "\r\n\t/":
-                return
-            # Digits 1-9 still jump when not filtering.
-            if data.isdigit() and data != "0":
-                self._jump(int(data) - 1)
-                return
-            if data in "jk":
-                self._navigate(1 if data == "j" else -1)
-                return
-            self.filter_mode = True
-            self._filter_append(data)
-            self._sync_layout_focus()
+        # Bind printable characters explicitly. Never use eager ``<any>``:
+        # it also matches Vt100MouseEvent and would swallow clicks/scroll.
+        _printable = (
+            "abcdefghijklmnopqrstuvwxyz"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "0123456789"
+            " -_.,:@+*=[]{}()!#$%^&;?~`'\"|<>"
+        )
+        for ch in _printable:
+
+            @bindings.add(ch, filter=filtering, eager=True)
+            def _filter_char(event: KeyPressEvent, char: str = ch) -> None:
+                self._filter_append(char)
+
+            @bindings.add(ch, filter=typing_start, eager=True)
+            def _start_char(event: KeyPressEvent, char: str = ch) -> None:
+                if char.isdigit() and char != "0":
+                    self._jump(int(char) - 1)
+                    return
+                if char in "jk":
+                    self._navigate(1 if char == "j" else -1)
+                    return
+                self.filter_mode = True
+                self._filter_append(char)
+                self._sync_layout_focus()
 
         for digit in range(1, 10):
 
@@ -1160,7 +1361,6 @@ class _LaunchScreen:
                     self.provider_index = next_index
                     self._sync_permission_selection()
                 self._ensure_provider_visible()
-                self._apply_scroll()
         elif self.focus == "permissions":
             self._set_permission(self.permission_index + delta)
         elif self.focus == "buttons":
@@ -1181,7 +1381,6 @@ class _LaunchScreen:
                     self.provider_index = index
                     self._sync_permission_selection()
                 self._ensure_provider_visible()
-                self._apply_scroll()
         elif self.focus == "permissions":
             if 0 <= index < len(APPROVAL_PRESETS):
                 self._set_permission(index)
