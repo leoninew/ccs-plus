@@ -34,6 +34,29 @@ class AppKind(StrEnum):
     def has_managed_profile_files(self) -> bool:
         return self is AppKind.CODEX
 
+    @property
+    def display_name(self) -> str:
+        """Human-facing label for TUI / tables (Title Case)."""
+        return {
+            AppKind.CLAUDE: "Claude",
+            AppKind.CODEX: "Codex",
+            AppKind.GROK: "Grok",
+        }[self]
+
+    @property
+    def badge(self) -> str:
+        """Short terminal-safe badge shown beside the display name."""
+        return {
+            AppKind.CLAUDE: "Cl",
+            AppKind.CODEX: "Cx",
+            AppKind.GROK: "Gk",
+        }[self]
+
+    @property
+    def style_key(self) -> str:
+        """prompt_toolkit style class suffix for this app's badge color."""
+        return self.value
+
     @classmethod
     def from_cli_value(cls, value: str) -> AppKind:
         try:
