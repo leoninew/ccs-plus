@@ -6,3 +6,6 @@ __pycache__/
 .env
 .secrets.toml
 data/
+build/
+dist/
+*.spec

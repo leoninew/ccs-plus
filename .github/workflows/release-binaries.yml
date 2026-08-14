@@ -1,0 +1,164 @@
+# Build standalone ccs-plus binaries when a GitHub Release is published.
+#
+# Trigger:
+#   - release published (tag release)
+#   - workflow_dispatch (manual rebuild for a tag)
+#
+# Artifacts are uploaded onto the release as:
+#   ccs-plus-linux-x86_64
+#   ccs-plus-macos-arm64
+#   ccs-plus-macos-x86_64
+#   ccs-plus-windows-x86_64.exe
+
+name: Release binaries
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach binaries to (e.g. v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-binaries-${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.artifact }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            artifact: ccs-plus-linux-x86_64
+            ext: ""
+          - os: macos-14
+            artifact: ccs-plus-macos-arm64
+            ext: ""
+          - os: macos-13
+            artifact: ccs-plus-macos-x86_64
+            ext: ""
+          - os: windows-2022
+            artifact: ccs-plus-windows-x86_64
+            ext: ".exe"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so scripts/version-calc.py (if used later) can walk commits.
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync project
+        run: uv sync --all-groups
+
+      - name: Install PyInstaller
+        run: uv pip install "pyinstaller>=6.11,<7"
+
+      - name: Build binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          ENTRY="src/ccs_plus/__main__.py"
+          NAME="ccs-plus"
+          uv run pyinstaller \
+            --noconfirm \
+            --clean \
+            --onefile \
+            --name "${NAME}" \
+            --paths src \
+            --hidden-import ccs_plus \
+            --hidden-import ccs_plus.cli \
+            --hidden-import ccs_plus.tui \
+            --hidden-import ccs_plus.sessions \
+            --collect-all prompt_toolkit \
+            --collect-all dynaconf \
+            --collect-submodules ccs_plus \
+            "${ENTRY}"
+
+          mkdir -p dist/release
+          src="dist/${NAME}${{ matrix.ext }}"
+          dst="dist/release/${{ matrix.artifact }}${{ matrix.ext }}"
+          if [[ ! -f "${src}" ]]; then
+            echo "Expected binary missing: ${src}" >&2
+            ls -la dist || true
+            exit 1
+          fi
+          cp "${src}" "${dst}"
+          if [[ "${{ runner.os }}" != "Windows" ]]; then
+            chmod +x "${dst}"
+          fi
+          ls -lh "${dst}"
+
+      - name: Smoke test binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          bin="dist/release/${{ matrix.artifact }}${{ matrix.ext }}"
+          "${bin}" --help | head -20
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/release/${{ matrix.artifact }}${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Attach binaries to release
+    needs: build
+    runs-on: ubuntu-22.04
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+
+    steps:
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "value=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        shell: bash
+        run: ls -lah artifacts
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          files: |
+            artifacts/ccs-plus-linux-x86_64
+            artifacts/ccs-plus-macos-arm64
+            artifacts/ccs-plus-macos-x86_64
+            artifacts/ccs-plus-windows-x86_64.exe
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
