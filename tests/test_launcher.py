@@ -16,6 +16,14 @@ from ccs_plus.launcher import LaunchSpec, build_launch_spec, launch
 from ccs_plus.settings import AppSettings
 
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
+_PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
 
 
 def _settings(root: Path) -> AppSettings:
@@ -41,6 +49,20 @@ def _provider(
         ),
         _CODEX,
     )
+
+
+@pytest.mark.parametrize("app", AppKind)
+@pytest.mark.parametrize("proxy", ("socks5://127.0.0.1:1080", ""))
+def test_launch_specs_set_global_proxy_and_clear_inherited_values(
+    tmp_path, monkeypatch, app: AppKind, proxy: str
+) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-cli")
+    for key in _PROXY_ENV_KEYS:
+        monkeypatch.setenv(key, "http://inherited.example.test:8080")
+
+    spec = build_launch_spec(_provider(app), make_app_settings(tmp_path, proxy=proxy), tmp_path)
+
+    assert {key: spec.env[key] for key in _PROXY_ENV_KEYS} == dict.fromkeys(_PROXY_ENV_KEYS, proxy)
 
 
 @pytest.mark.parametrize(
@@ -91,9 +113,7 @@ def test_launch_specs_keep_secret_out_of_argv_and_use_expected_home(
         assert spec.env["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
     if app is AppKind.CODEX:
         assert spec.argv[spec.argv.index("--model") + 1] == "example-model"
-        assert (
-            spec.argv[spec.argv.index("-c") + 1] == "model_reasoning_effort=high"
-        )
+        assert spec.argv[spec.argv.index("-c") + 1] == "model_reasoning_effort=high"
         assert "CODEX_SQLITE_HOME" not in spec.env
         assert "--sandbox" not in spec.argv
         assert "--dangerously-bypass-approvals-and-sandbox" not in spec.argv

@@ -66,6 +66,7 @@ def make_app_settings(
     *,
     database_path: Path | None = None,
     encryption_key: str = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    proxy: str = "",
     approval_policy: str = "never",
     sandbox_mode: str = "danger-full-access",
     session_model_provider: str = "ccs-plus-managed",
@@ -79,6 +80,7 @@ def make_app_settings(
         project_root=root,
         database_path=database_path or (root / "cc-switch.db"),
         encryption_key=encryption_key,
+        proxy=proxy,
         claude=ClaudeSettings(
             home=root / "claude",
             user_home=claude_user_home if claude_user_home is not None else root / "user-claude",
@@ -114,6 +116,7 @@ def settings_root(tmp_path: Path, database_path: Path) -> Path:
                 "database:",
                 f'  path: "{database_path.as_posix()}"',
                 'encryption_key: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="',
+                'proxy: ""',
                 "apps:",
                 "  claude:",
                 "    home: data/claude",

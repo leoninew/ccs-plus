@@ -22,6 +22,14 @@ from ccs_plus.sessions import Session
 from ccs_plus.settings import AppSettings, environment_with_defaults
 
 logger = logging.getLogger(__name__)
+PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +82,7 @@ def build_launch_spec(
             sandbox_mode=sandbox_mode if sandbox_mode is not None else runtime.sandbox_mode,
         )
     env = environment_with_defaults()
+    _apply_proxy(env, settings.proxy)
     state_home = settings.state_home(provider.app.value)
     model = model_override or runtime.model
     effort = effort_override or runtime.effort
@@ -318,3 +327,8 @@ def _required_bool(value: bool | None, label: str) -> bool:
 def _clear(env: dict[str, str], *keys: str) -> None:
     for key in keys:
         env.pop(key, None)
+
+
+def _apply_proxy(env: dict[str, str], proxy: str) -> None:
+    for key in PROXY_ENV_KEYS:
+        env[key] = proxy

@@ -56,6 +56,7 @@ class AppSettings:
     project_root: Path
     database_path: Path
     encryption_key: str
+    proxy: str
     claude: ClaudeSettings
     codex: CodexSettings
     grok: GrokSettings
@@ -113,6 +114,14 @@ def _resolve_non_empty_string(value: object, key: str) -> str:
     return value.strip()
 
 
+def _resolve_proxy(value: object) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ProviderError("Configuration proxy must be a string.")
+    return value.strip()
+
+
 def _resolve_bool(value: object, key: str) -> bool:
     if isinstance(value, bool):
         return value
@@ -147,6 +156,7 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
         project_root=root,
         database_path=_resolve_path(root, _get(config, "database.path"), "database.path"),
         encryption_key=_resolve_encryption_key(_get(config, "encryption_key"), "encryption_key"),
+        proxy=_resolve_proxy(_get(config, "proxy")),
         claude=ClaudeSettings(
             home=_resolve_path(root, _get(config, "apps.claude.home"), "apps.claude.home"),
             user_home=_resolve_optional_user_home(

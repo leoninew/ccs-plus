@@ -33,6 +33,7 @@ ccs-plus providers list
 ```text
 CCS_PLUS_DATABASE__PATH=~/.cc-switch/cc-switch.db
 CCS_PLUS_APPS__CODEX__HOME=data/codex
+CCS_PLUS_PROXY=http://127.0.0.1:7890
 ```
 
 `encryption_key` 用于 provider 导入导出，必须是有效的 Fernet key：由 32 字节密钥编码成 URL-safe Base64 字符串（通常为 44 个字符），不能为空或保留占位值。可用以下命令生成：
@@ -40,6 +41,8 @@ CCS_PLUS_APPS__CODEX__HOME=data/codex
 ```powershell
 uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
+
+`proxy` 是 Claude、Codex、Grok 共用的启动代理地址。每次启动都会将它写入 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 及其小写兼容变量；保留为空字符串会显式清除从父进程继承的这些代理变量。通过环境变量覆盖时使用 `CCS_PLUS_PROXY`。
 
 对于自定义 provider，三个应用启动时都会读取数据库中所选 provider 的实际 endpoint、API Key、模型和推理强度。`launch` 的 `--model`、`--effort` 是可选的单次覆盖，不回写 provider；未传时始终使用 provider 配置。官方 provider 不解析自定义配置，使用原生内置配置。权限属性优先读取 provider 记录：Claude 的 `permission_mode`，Codex 的 `approval_policy` 与 `sandbox_mode`，Grok 的 `sandbox_mode` 与 `always_approve`。这些必需权限项在 provider 缺失时才回退到对应的 `apps.*` 配置。`apps.codex.approval_policy` 和 `sandbox_mode` 也作为新增/导入 provider 时写入的初始策略。
 

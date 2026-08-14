@@ -10,6 +10,7 @@ from ccs_plus.settings import load_settings
 
 def test_settings_default_homes_use_local_data(settings_root) -> None:
     settings = load_settings(settings_root)
+    assert settings.proxy == ""
     assert settings.claude.home == settings_root / "data" / "claude"
     assert settings.claude.permission_mode == "bypassPermissions"
     assert settings.codex.home == settings_root / "data" / "codex"
@@ -34,6 +35,7 @@ def test_settings_loads_codex_provider_defaults(settings_root) -> None:
 
 
 def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> None:
+    monkeypatch.setenv("CCS_PLUS_PROXY", "http://127.0.0.1:7890")
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__HOME", "custom/codex")
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__USER_HOME", "custom/user-codex")
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__SESSION_MODEL_PROVIDER", "shared-custom")
@@ -44,6 +46,7 @@ def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> No
     monkeypatch.setenv("CCS_PLUS_ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
     settings = load_settings(settings_root)
     assert settings.codex.home == settings_root / "custom" / "codex"
+    assert settings.proxy == "http://127.0.0.1:7890"
     assert settings.codex.user_home == settings_root / "custom" / "user-codex"
     assert settings.codex.session_model_provider == "shared-custom"
     assert settings.claude.permission_mode == "manual"
@@ -51,6 +54,17 @@ def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> No
     assert settings.grok.always_approve is False
     assert settings.claude.user_home == settings_root / "custom" / "user-claude"
     assert settings.encryption_key == "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+
+
+def test_empty_proxy_environment_override_clears_yaml_value(settings_root, monkeypatch) -> None:
+    path = settings_root / "settings.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace('proxy: ""', "proxy: http://yaml-proxy:7890"),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CCS_PLUS_PROXY", "")
+
+    assert load_settings(settings_root).proxy == ""
 
 
 def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None:
@@ -81,6 +95,7 @@ def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None
         encoding="utf-8",
     )
     settings = load_settings(settings_root)
+    assert settings.proxy == ""
     assert settings.claude.user_home == settings_root / "custom" / "claude-user"
     assert settings.codex.user_home == settings_root / "custom" / "codex-user"
 

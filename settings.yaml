@@ -12,6 +12,9 @@ database:
 # Fernet key for providers export/import. Prefer setting via .env.
 encryption_key: ""
 
+# Global network proxy for all launched CLIs. An empty value clears inherited proxies.
+proxy: ""
+
 # Per-app runtime homes and launch settings.
 # Launch uses permission values in a provider record when present; otherwise it falls
 # back to the matching app values below. Codex values also seed newly added/imported providers.
