@@ -381,6 +381,24 @@ def test_provider_list_numbers_each_app_from_one(monkeypatch) -> None:
     ]
 
 
+def test_provider_list_renders_alias_after_name_without_shortcut_column(monkeypatch) -> None:
+    provider = _provider(AppKind.CODEX, "Codex 1")
+
+    class Repository:
+        def list(self, apps):
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(main, ["providers", "list"])
+
+    assert result.exit_code == 0
+    assert "Alias" in result.output
+    assert result.output.index("Name") < result.output.index("Alias")
+    assert "x1" in result.output
+    assert "Shortcut" not in result.output
+    assert "ccs-plus run x1" not in result.output
+
+
 def test_provider_list_falls_back_to_endpoint_candidates(monkeypatch) -> None:
     provider = Provider(
         id="legacy-provider",

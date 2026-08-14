@@ -434,7 +434,7 @@ def _render_providers(
     entries: list[ProviderListEntry], console_factory: Callable[[], Console] = Console
 ) -> None:
     table = Table(title="cc-switch providers")
-    for heading in ("App", "Name", "Endpoint", "Model", "Reasoning", "Category", "Shortcut"):
+    for heading in ("App", "Name", "Alias", "Endpoint", "Model", "Reasoning", "Category"):
         table.add_column(heading, overflow="fold")
     for entry in entries:
         provider = entry.provider
@@ -446,11 +446,11 @@ def _render_providers(
         table.add_row(
             provider.app.value,
             provider.name,
+            entry.run_target,
             endpoint,
             display.model or "",
             display.effort or "",
             category,
-            entry.shortcut,
         )
     console_factory().print(table)
 
