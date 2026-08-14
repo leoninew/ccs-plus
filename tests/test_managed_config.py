@@ -197,6 +197,55 @@ js_repl = true
     )
 
 
+def test_codex_profile_merges_state_and_user_mcp_servers(tmp_path) -> None:
+    runtime = _runtime(AppKind.CODEX)
+    (tmp_path / "config.toml").write_text(
+        """
+[mcp_servers.shared]
+command = "state"
+
+[mcp_servers.state-only]
+command = "state"
+""",
+        encoding="utf-8",
+    )
+    user_home = tmp_path / "user-codex"
+    user_home.mkdir()
+    (user_home / "config.toml").write_text(
+        """
+[mcp_servers.shared]
+command = "user"
+
+[mcp_servers.user-only]
+command = "user"
+""",
+        encoding="utf-8",
+    )
+
+    profile = ensure_managed_config(runtime, tmp_path, None, None, user_home=user_home)
+    document = tomlkit.parse((tmp_path / f"{profile.name}.config.toml").read_text(encoding="utf-8"))
+
+    assert document["mcp_servers"]["shared"]["command"] == "user"
+    assert document["mcp_servers"]["state-only"]["command"] == "state"
+    assert document["mcp_servers"]["user-only"]["command"] == "user"
+
+
+def test_codex_profile_keeps_state_mcp_servers_without_user_home(tmp_path) -> None:
+    runtime = _runtime(AppKind.CODEX)
+    (tmp_path / "config.toml").write_text(
+        """
+[mcp_servers.state-only]
+command = "state"
+""",
+        encoding="utf-8",
+    )
+
+    profile = ensure_managed_config(runtime, tmp_path, None, None)
+    document = tomlkit.parse((tmp_path / f"{profile.name}.config.toml").read_text(encoding="utf-8"))
+
+    assert document["mcp_servers"]["state-only"]["command"] == "state"
+
+
 def test_codex_profile_user_tables_refresh_on_each_ensure(tmp_path) -> None:
     runtime = _runtime(AppKind.CODEX)
     user_home = tmp_path / "user-codex"

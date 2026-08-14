@@ -673,21 +673,14 @@ def test_launch_specs_share_the_app_home_across_providers(tmp_path, monkeypatch,
 
 def test_claude_launch_links_and_syncs_mcp(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-claude")
-    user_home = tmp_path / "user-claude"
+    user_home = tmp_path / "custom-home" / ".claude"
     (user_home / "skills" / "housekeeper").mkdir(parents=True)
     (user_home / "plugins" / "marketplaces").mkdir(parents=True)
-    source = tmp_path / "user.claude.json"
-    source.write_text(
+    (user_home.parent / ".claude.json").write_text(
         json.dumps({"mcpServers": {"demo": {"command": "demo"}}}),
         encoding="utf-8",
     )
     settings = make_app_settings(tmp_path, claude_user_home=user_home)
-    monkeypatch.setattr(
-        "ccs_plus.home_visibility.Path.home",
-        classmethod(lambda cls: tmp_path),
-    )
-    # sync reads Path.home() / ".claude.json"; place source there.
-    (tmp_path / ".claude.json").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
 
     build_launch_spec(_provider(AppKind.CLAUDE), settings, tmp_path)
 
@@ -706,6 +699,41 @@ def test_grok_launch_does_not_link_user_skills(tmp_path, monkeypatch) -> None:
     build_launch_spec(_provider(AppKind.GROK), settings, tmp_path)
 
     assert not (settings.grok.home / "skills").exists()
+
+
+def test_grok_launch_merges_user_mcp_servers(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-grok")
+    user_home = tmp_path / "user-grok"
+    user_home.mkdir()
+    (user_home / "config.toml").write_text(
+        """
+[mcp_servers.shared]
+command = "user"
+
+[mcp_servers.user-only]
+command = "user"
+""",
+        encoding="utf-8",
+    )
+    settings = make_app_settings(tmp_path, grok_user_home=user_home)
+    settings.grok.home.mkdir()
+    (settings.grok.home / "config.toml").write_text(
+        """
+[mcp_servers.shared]
+command = "state"
+
+[mcp_servers.state-only]
+command = "state"
+""",
+        encoding="utf-8",
+    )
+
+    build_launch_spec(_provider(AppKind.GROK), settings, tmp_path)
+
+    document = tomlkit.parse((settings.grok.home / "config.toml").read_text(encoding="utf-8"))
+    assert document["mcp_servers"]["shared"]["command"] == "user"
+    assert document["mcp_servers"]["state-only"]["command"] == "state"
+    assert document["mcp_servers"]["user-only"]["command"] == "user"
 
 
 def test_launch_logs_argv_and_exit_code_without_environment(monkeypatch, tmp_path, caplog) -> None:

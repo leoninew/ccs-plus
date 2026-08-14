@@ -75,6 +75,7 @@ def make_app_settings(
     grok_always_approve: bool = True,
     claude_user_home: Path | None = None,
     codex_user_home: Path | None = None,
+    grok_user_home: Path | None = None,
 ) -> AppSettings:
     return AppSettings(
         project_root=root,
@@ -97,6 +98,7 @@ def make_app_settings(
             home=root / "grok",
             sandbox_mode=grok_sandbox_mode,
             always_approve=grok_always_approve,
+            user_home=grok_user_home if grok_user_home is not None else root / "user-grok",
         ),
     )
 

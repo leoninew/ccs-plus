@@ -80,7 +80,7 @@ def link_codex_sessions(state_home: Path, user_home: Path) -> None:
 def apply_claude_visibility(state_home: Path, user_home: Path) -> None:
     link_user_entries(user_home / "skills", state_home / "skills")
     link_user_entries(user_home / "plugins", state_home / "plugins")
-    sync_claude_mcp_servers(state_home)
+    sync_claude_mcp_servers(state_home, source_path=user_home.parent / ".claude.json")
 
 
 def sync_claude_mcp_servers(
@@ -89,7 +89,8 @@ def sync_claude_mcp_servers(
 ) -> None:
     """Merge user-level mcpServers into the isolated Claude state file.
 
-    Source defaults to ``Path.home() / ".claude.json"`` (OS home, not user_home).
+    Source defaults to ``Path.home() / ".claude.json"``. Callers that use a
+    configured Claude user home pass its sibling ``.claude.json`` explicitly.
     Illegal JSON is warned about and ignored. The source file is never modified.
     """
     source = source_path if source_path is not None else Path.home() / ".claude.json"

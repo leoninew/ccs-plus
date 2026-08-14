@@ -126,8 +126,7 @@ def _ensure_codex_profile(
         providers[session_model_provider] = provider
         document["model_providers"] = providers
 
-        if user_home is not None:
-            _merge_codex_user_tables(document, user_home, project_directory)
+        _merge_codex_user_tables(document, state_home, user_home, project_directory)
 
         _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
     return ManagedProfile(name=profile, env_key=env_key)
@@ -135,17 +134,42 @@ def _ensure_codex_profile(
 
 def _merge_codex_user_tables(
     document: TOMLDocument,
-    user_home: Path,
+    state_home: Path,
+    user_home: Path | None,
     project_directory: Path | None = None,
 ) -> None:
-    user_document = _load_codex_user_config(user_home)
+    state_document = _load_codex_state_config(state_home)
+    user_document = _load_codex_user_config(user_home) if user_home is not None else None
+    _merge_codex_mcp_servers(document, state_document, user_document)
     if user_document is None:
         return
     for key in CODEX_USER_CONFIG_TABLES:
+        if key == "mcp_servers":
+            continue
         if key not in user_document:
             continue
         document[key] = deepcopy(user_document[key])
     _merge_current_project_trust(document, user_document, project_directory)
+
+
+def _merge_codex_mcp_servers(
+    document: TOMLDocument,
+    state_document: TOMLDocument | None,
+    user_document: TOMLDocument | None,
+) -> None:
+    merged = tomlkit.table()
+    has_servers = False
+    for source in (state_document, user_document):
+        if source is None:
+            continue
+        servers = source.get("mcp_servers")
+        if not isinstance(servers, Mapping):
+            continue
+        for name, value in servers.items():
+            merged[name] = deepcopy(value)
+            has_servers = True
+    if has_servers:
+        document["mcp_servers"] = merged
 
 
 def sync_codex_user_config(
@@ -181,18 +205,75 @@ def sync_codex_user_config(
 
 
 def _load_codex_user_config(user_home: Path) -> TOMLDocument | None:
-    config_path = user_home / "config.toml"
+    return _load_codex_config(user_home, "user")
+
+
+def _load_codex_state_config(state_home: Path) -> TOMLDocument | None:
+    return _load_codex_config(state_home, "state")
+
+
+def _load_codex_config(home: Path, source: str) -> TOMLDocument | None:
+    config_path = home / "config.toml"
     if not config_path.is_file():
         return None
     try:
         return tomlkit.parse(config_path.read_text(encoding="utf-8"))
     except Exception as exc:
         logger.warning(
-            "Skipping Codex user config merge from %s: %s",
+            "Skipping Codex %s config merge from %s: %s",
+            source,
             config_path,
             exc,
         )
         return None
+
+
+def sync_grok_user_mcp_servers(state_home: Path, user_home: Path | None) -> None:
+    """Copy user-scope Grok MCP servers into the stable runtime home.
+
+    The state-home entries are retained so MCP servers added while Grok runs
+    under ``GROK_HOME`` survive later provider launches. User-home entries win
+    on name conflicts, matching the Codex and Claude precedence rules.
+    """
+    if user_home is None or _same_path(state_home, user_home):
+        return
+    source_path = user_home / "config.toml"
+    if not source_path.is_file():
+        return
+    try:
+        source_document = tomlkit.parse(source_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Skipping Grok MCP merge from %s: %s", source_path, exc)
+        return
+    user_servers = source_document.get("mcp_servers")
+    if not isinstance(user_servers, Mapping):
+        return
+
+    path = state_home / "config.toml"
+    with _locked(path):
+        content = path.read_text(encoding="utf-8") if path.exists() else ""
+        try:
+            document = tomlkit.parse(content) if content else tomlkit.document()
+        except Exception as exc:
+            logger.warning("Skipping Grok MCP merge into %s: %s", path, exc)
+            return
+        current_servers = document.get("mcp_servers")
+        if current_servers is not None and not isinstance(current_servers, Mapping):
+            logger.warning("Skipping Grok MCP merge; invalid mcp_servers in %s", path)
+            return
+
+        merged = tomlkit.table()
+        if isinstance(current_servers, Mapping):
+            for name, value in current_servers.items():
+                merged[name] = deepcopy(value)
+        for name, value in user_servers.items():
+            merged[name] = deepcopy(value)
+        document["mcp_servers"] = merged
+        _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
+
+
+def _same_path(first: Path, second: Path) -> bool:
+    return os.path.normcase(os.path.abspath(first)) == os.path.normcase(os.path.abspath(second))
 
 
 def _merge_current_project_trust(

@@ -17,7 +17,11 @@ from ccs_plus.domain import (
     validate_launch_options,
 )
 from ccs_plus.home_visibility import apply_claude_visibility, apply_codex_visibility
-from ccs_plus.managed_config import ensure_managed_config, sync_codex_user_config
+from ccs_plus.managed_config import (
+    ensure_managed_config,
+    sync_codex_user_config,
+    sync_grok_user_mcp_servers,
+)
 from ccs_plus.sessions import Session
 from ccs_plus.settings import AppSettings, environment_with_defaults
 
@@ -118,6 +122,7 @@ def build_launch_spec(
             session_id=session_id,
         )
     elif isinstance(runtime, GrokRuntime):
+        sync_grok_user_mcp_servers(state_home, settings.grok.user_home)
         argv = _grok_spec(
             executable,
             runtime,
