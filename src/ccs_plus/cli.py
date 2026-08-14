@@ -262,9 +262,12 @@ def launch_provider(
 
 @main.command("run", context_settings=HELP_CONTEXT_SETTINGS)
 @click.argument("target")
-def run_provider(target: str) -> None:
+@click.option("-v", "--verbose", is_flag=True, help="Log launch details to standard error.")
+def run_provider(target: str, verbose: bool) -> None:
     """Launch a provider listed as c1, x1, or g1."""
     try:
+        if verbose:
+            _configure_verbose_logging()
         app, number = _parse_run_target(target)
         settings = _settings()
         records = ProviderRepository(settings.database_path).list([app])

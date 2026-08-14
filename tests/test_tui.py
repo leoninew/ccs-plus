@@ -79,6 +79,16 @@ def test_launcher_default_path_launches_new_session(tmp_path: Path) -> None:
     assert plan.approval_policy is None
 
 
+def test_launcher_keeps_provider_list_order_instead_of_sorting_by_name(tmp_path: Path) -> None:
+    first = _provider(AppKind.CLAUDE, "Zulu")
+    second = _provider(AppKind.CLAUDE, "Alpha")
+
+    plan = _run(tmp_path, [first, second], "\r\r\r\r\r")
+
+    assert plan is not None
+    assert plan.provider.id == first.id
+
+
 def test_launcher_selects_codex_and_permission_preset(tmp_path: Path) -> None:
     claude = _provider(AppKind.CLAUDE, "Claude P")
     codex = _provider(AppKind.CODEX, "Codex P")

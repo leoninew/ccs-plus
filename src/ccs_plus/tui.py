@@ -348,10 +348,7 @@ class _LaunchScreen:
 
     @property
     def all_app_providers(self) -> list[Provider]:
-        return self.history.ordered(
-            self.current_app,
-            [p for p in self._all_providers if p.app is self.current_app],
-        )
+        return [provider for provider in self._all_providers if provider.app is self.current_app]
 
     @property
     def filtered_providers(self) -> list[Provider]:

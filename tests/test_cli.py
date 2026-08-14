@@ -184,6 +184,49 @@ def test_run_rejects_unknown_list_number(monkeypatch, tmp_path) -> None:
     assert "Provider number 1 does not exist for grok" in result.output
 
 
+def test_run_verbose_configures_logging_and_does_not_log_api_key(
+    monkeypatch, tmp_path, caplog
+) -> None:
+    provider = _provider(AppKind.CLAUDE)
+    settings = _settings(tmp_path)
+    logging_options = []
+
+    class Repository:
+        def __init__(self, database_path):
+            assert database_path == settings.database_path
+
+        def list(self, apps):
+            assert apps == [AppKind.CLAUDE]
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr("ccs_plus.cli.ProviderRepository", Repository)
+    monkeypatch.setattr(
+        "ccs_plus.cli.build_launch_spec",
+        lambda provider, settings, cwd, model_override, effort_override: LaunchSpec(
+            argv=("native-cli",), cwd=tmp_path, env={"API_KEY": "cli-secret-key"}
+        ),
+    )
+    monkeypatch.setattr("ccs_plus.cli.launch", lambda spec: 0)
+    monkeypatch.setattr(
+        "ccs_plus.cli.logging.basicConfig", lambda **kwargs: logging_options.append(kwargs)
+    )
+    caplog.set_level(logging.INFO, logger="ccs_plus.cli")
+
+    result = CliRunner().invoke(main, ["run", "-v", "c1"])
+
+    assert result.exit_code == 0
+    assert logging_options == [
+        {
+            "level": logging.INFO,
+            "format": "%(levelname)s %(name)s: %(message)s",
+            "force": True,
+        }
+    ]
+    assert "Launching claude with provider" in caplog.text
+    assert "cli-secret-key" not in caplog.text
+
+
 def test_launch_verbose_configures_logging_and_does_not_log_api_key(
     monkeypatch, tmp_path, caplog
 ) -> None:
