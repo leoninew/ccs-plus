@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.application.current import get_app
@@ -82,6 +83,8 @@ STYLE = Style.from_dict(
 _SESSION_ROW = 2
 _PROVIDER_ROW = 2
 _PERMISSION_ROW = 2
+
+SessionScope = Literal["this_dir", "all"]
 
 
 @dataclass(frozen=True)
@@ -236,6 +239,38 @@ def _fuzzy_match(query: str, *parts: str) -> bool:
     return True
 
 
+def _normalize_cwd(path: str | Path) -> Path | None:
+    try:
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            candidate = (Path.cwd() / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return candidate
+
+
+def _session_matches_cwd(session_cwd: str, scope_cwd: Path) -> bool:
+    """True when the session belongs to scope_cwd (exact or nested under it)."""
+    if not session_cwd:
+        return False
+    session_path = _normalize_cwd(session_cwd)
+    if session_path is None:
+        return False
+    try:
+        scope = scope_cwd.resolve()
+    except (OSError, RuntimeError):
+        scope = scope_cwd
+    if os.path.normcase(str(session_path)) == os.path.normcase(str(scope)):
+        return True
+    try:
+        session_path.relative_to(scope)
+        return True
+    except ValueError:
+        return False
+
+
 class _LaunchScreen:
     """Single-screen launcher: config (left) | sessions (right)."""
 
@@ -274,6 +309,8 @@ class _LaunchScreen:
         self.provider_filter = ""
         self.session_filter = ""
         self.filter_mode = False
+        # Default: only sessions for the launch/working directory (like native CLIs).
+        self.sessions_scope: SessionScope = "this_dir"
 
         self.dir_area = TextArea(
             text=str(default_cwd),
@@ -395,23 +432,48 @@ class _LaunchScreen:
         if self._filtered_sessions_cache is not None:
             return self._filtered_sessions_cache
         sessions = self.all_sessions
+        if self.sessions_scope == "this_dir":
+            scope_cwd = self._session_scope_cwd()
+            sessions = [
+                session for session in sessions if _session_matches_cwd(session.cwd, scope_cwd)
+            ]
         query = self.session_filter
-        if not query:
-            self._filtered_sessions_cache = sessions
-            return sessions
-        result = [
-            session
-            for session in sessions
-            if _fuzzy_match(query, session.title, session.cwd, session.session_id)
-        ]
-        self._filtered_sessions_cache = result
-        return result
+        if query:
+            sessions = [
+                session
+                for session in sessions
+                if _fuzzy_match(query, session.title, session.cwd, session.session_id)
+            ]
+        self._filtered_sessions_cache = sessions
+        return sessions
+
+    def _session_scope_cwd(self) -> Path:
+        """Directory used for the 'this dir' session scope.
+
+        Prefer a valid path from the directory field while creating a new
+        session; otherwise fall back to the launcher's default cwd.
+        """
+        if self.selected_session is None:
+            text = self.dir_buffer.text.strip()
+            if text:
+                path = Path(text).expanduser()
+                path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
+                if path.is_dir():
+                    return path
+        return self.default_cwd
 
     def _invalidate_provider_filter(self) -> None:
         self._filtered_providers_cache = None
 
     def _invalidate_session_filter(self) -> None:
         self._filtered_sessions_cache = None
+
+    def _toggle_sessions_scope(self) -> None:
+        self.sessions_scope = "all" if self.sessions_scope == "this_dir" else "this_dir"
+        self._invalidate_session_filter()
+        self.session_index = 0
+        self._session_scroll = 0
+        self._clamp_session_index()
 
     @property
     def selected_session(self) -> Session | None:
@@ -478,6 +540,9 @@ class _LaunchScreen:
         if self.dir_buffer.text == text:
             return
         self.dir_buffer.set_document(Document(text, len(text)), bypass_readonly=True)
+        if self.sessions_scope == "this_dir":
+            self._invalidate_session_filter()
+            self._clamp_session_index()
 
     def _focus_order(self) -> list[str]:
         order = ["app", "provider"]
@@ -492,19 +557,27 @@ class _LaunchScreen:
         order = self._focus_order()
         if pane not in order:
             pane = order[0]
+        previous = self.focus
         if pane not in {"provider", "sessions"}:
             self.filter_mode = False
         self.focus = pane
+        if previous == "dir" and pane != "dir" and self.sessions_scope == "this_dir":
+            self._invalidate_session_filter()
+            self._clamp_session_index()
         self._sync_layout_focus()
 
     def _move_focus(self, delta: int) -> None:
         self.filter_mode = False
         order = self._focus_order()
+        previous = self.focus
         if self.focus not in order:
             self.focus = order[0]
         else:
             index = order.index(self.focus)
             self.focus = order[(index + delta) % len(order)]
+        if previous == "dir" and self.focus != "dir" and self.sessions_scope == "this_dir":
+            self._invalidate_session_filter()
+            self._clamp_session_index()
         self._sync_layout_focus()
 
     def _sync_layout_focus(self) -> None:
@@ -705,6 +778,8 @@ class _LaunchScreen:
             ("class:footer", " · "),
             ("class:footer.key", "/"),
             ("class:footer", " filter · "),
+            ("class:footer.key", "a"),
+            ("class:footer", " scope · "),
             ("class:footer.key", "esc"),
             ("class:footer", " "),
         ]
@@ -731,8 +806,11 @@ class _LaunchScreen:
         filt = ""
         if pane == "provider" and self.provider_filter:
             filt = f" /{self.provider_filter}"
-        elif pane == "sessions" and self.session_filter:
-            filt = f" /{self.session_filter}"
+        elif pane == "sessions":
+            scope = "this dir" if self.sessions_scope == "this_dir" else "all"
+            filt = f" · {scope}"
+            if self.session_filter:
+                filt += f" /{self.session_filter}"
         if self.focus == pane:
             suffix = " · filter" if self.filter_mode and pane in {"provider", "sessions"} else ""
             return f" ▶ {label}{filt}{suffix} "
@@ -848,13 +926,20 @@ class _LaunchScreen:
 
     def _session_lines(self) -> StyleAndTextTuples:
         lines: StyleAndTextTuples = []
-        entries: list[tuple[int, str, str]] = [(-1, "New session", "start fresh")]
+        scope_hint = (
+            f"in {_short_path(str(self._session_scope_cwd()))}"
+            if self.sessions_scope == "this_dir"
+            else "any project"
+        )
+        entries: list[tuple[int, str, str]] = [(-1, "New session", f"start fresh · {scope_hint}")]
         for index, session in enumerate(self.filtered_sessions):
             when = _relative_time(session.modified_at)
             subtitle = f"{_short_path(session.cwd)} · {when}" if session.cwd else when
             entries.append((index, session.title or session.session_id[:8], subtitle))
         if len(entries) == 1 and self.session_filter:
             entries.append((-2, "(no matches)", f"filter: {self.session_filter}"))
+        elif len(entries) == 1 and self.sessions_scope == "this_dir":
+            entries.append((-2, "(no sessions here)", "press a for all projects"))
         elif len(entries) == 1:
             entries.append((-2, "(no sessions)", "launch first to populate"))
 
@@ -1321,6 +1406,14 @@ class _LaunchScreen:
         def _slash(event: Any) -> None:
             self._start_filter()
 
+        sessions_scope = Condition(lambda: self.focus == "sessions" and not self.filter_mode)
+
+        @bindings.add("a", filter=sessions_scope, eager=True)
+        def _toggle_scope(event: Any) -> None:
+            self._toggle_sessions_scope()
+            with contextlib.suppress(Exception):
+                get_app().invalidate()
+
         @bindings.add("backspace", filter=filtering, eager=True)
         def _bs(event: Any) -> None:
             self._filter_backspace()
@@ -1335,6 +1428,7 @@ class _LaunchScreen:
 
         # Bind printable characters explicitly. Never use eager ``<any>``:
         # it also matches Vt100MouseEvent and would swallow clicks/scroll.
+        # 'a' on sessions (not filtering) is reserved for scope toggle above.
         _printable = (
             "abcdefghijklmnopqrstuvwxyz"
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -1347,7 +1441,13 @@ class _LaunchScreen:
             def _filter_char(event: KeyPressEvent, char: str = ch) -> None:
                 self._filter_append(char)
 
-            @bindings.add(ch, filter=typing_start, eager=True)
+            if ch == "a":
+                # Covered by sessions_scope toggle when focus is sessions.
+                start_filter = Condition(lambda: not self.filter_mode and self.focus == "provider")
+            else:
+                start_filter = typing_start
+
+            @bindings.add(ch, filter=start_filter, eager=True)
             def _start_char(event: KeyPressEvent, char: str = ch) -> None:
                 if char.isdigit() and char != "0":
                     self._jump(int(char) - 1)
