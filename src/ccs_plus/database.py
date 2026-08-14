@@ -249,14 +249,22 @@ class ProviderRepository:
         finally:
             conn.close()
 
-    def reset_non_official(self) -> int:
-        """Delete all non-official providers in one transaction."""
+    def reset_non_official(self, apps: Iterable[AppKind]) -> int:
+        """Delete non-official providers for the selected apps in one transaction."""
+        selected = tuple(apps)
+        if not selected:
+            return 0
         conn = self._connect()
         try:
             self._preflight(conn)
             conn.execute("BEGIN IMMEDIATE")
             try:
-                rows = conn.execute("SELECT id, app_type, category FROM providers").fetchall()
+                placeholders = ", ".join("?" for _ in selected)
+                rows = conn.execute(
+                    "SELECT id, app_type, category FROM providers "
+                    f"WHERE app_type IN ({placeholders})",
+                    tuple(app.db_app_type for app in selected),
+                ).fetchall()
                 targets = [
                     (row["id"], row["app_type"])
                     for row in rows

@@ -86,8 +86,10 @@ def test_delete_rejects_official_provider(database_path) -> None:
 
 def test_reset_non_official_deletes_only_custom_providers(database_path) -> None:
     repository = ProviderRepository(database_path)
-    custom = _new_provider(AppKind.CLAUDE)
-    repository.add(custom)
+    claude = _new_provider(AppKind.CLAUDE)
+    codex = _new_provider(AppKind.CODEX)
+    repository.add(claude)
+    repository.add(codex)
     with sqlite3.connect(database_path) as conn:
         conn.execute(
             """
@@ -98,10 +100,10 @@ def test_reset_non_official_deletes_only_custom_providers(database_path) -> None
             ("claude-official", "claude", "Claude", "{}"),
         )
 
-    assert repository.reset_non_official() == 1
-    assert [provider.id for provider in repository.list()] == ["claude-official"]
+    assert repository.reset_non_official([AppKind.CLAUDE]) == 1
+    assert [provider.id for provider in repository.list()] == ["claude-official", codex.id]
     with sqlite3.connect(database_path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM provider_endpoints").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM provider_endpoints").fetchone()[0] == 1
 
 
 def test_delete_is_scoped_by_app_type(database_path) -> None:

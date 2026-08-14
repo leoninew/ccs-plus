@@ -79,6 +79,10 @@ uv run ccs-plus providers import "data/providers-<timestamp>.json"
 # 按应用和名称删除自定义 provider；--yes 是必要的确认参数
 uv run ccs-plus providers delete claude "<provider-name>" --yes
 
+# 预览删除指定应用的全部自定义 provider；加入 --no-dry-run 后才实际删除
+uv run ccs-plus providers reset codex
+uv run ccs-plus providers reset codex --no-dry-run
+
 # 使用指定 provider 启动 Claude；provider 名称必须已存在于数据库
 uv run ccs-plus launch claude --provider "<provider-name>"
 

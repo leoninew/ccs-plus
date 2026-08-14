@@ -5,7 +5,12 @@ import tomlkit
 
 from ccs_plus.adapters import build_provider, runtime_from_provider
 from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, ProviderError
-from ccs_plus.managed_config import ensure_managed_config as _ensure_managed_config
+from ccs_plus.managed_config import (
+    ensure_managed_config as _ensure_managed_config,
+)
+from ccs_plus.managed_config import (
+    remove_managed_codex_profile,
+)
 
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
 
@@ -140,6 +145,19 @@ def test_codex_profile_rejects_unmanaged_file(tmp_path) -> None:
 
     with pytest.raises(ProviderError, match="unmanaged"):
         ensure_managed_config(runtime, tmp_path, None, None)
+
+
+def test_remove_managed_codex_profile_requires_matching_marker(tmp_path) -> None:
+    runtime = _runtime(AppKind.CODEX)
+    profile = ensure_managed_config(runtime, tmp_path, None, None)
+    path = tmp_path / f"{profile.name}.config.toml"
+
+    assert remove_managed_codex_profile(tmp_path, runtime.provider.id) is True
+    assert not path.exists()
+
+    path.write_text('model = "user-owned"\n', encoding="utf-8")
+    assert remove_managed_codex_profile(tmp_path, runtime.provider.id) is False
+    assert path.exists()
 
 
 def test_codex_profile_merges_user_whitelist_tables(tmp_path) -> None:
@@ -318,6 +336,50 @@ context_window = 500000
     assert document["model"][profile.name]["model"] == "example-model"
     assert document["model"][profile.name]["context_window"] == 500_000
     assert (tmp_path / "config.toml.ccs-plus.bak").is_file()
+
+
+def test_grok_config_keeps_only_current_managed_model(tmp_path) -> None:
+    first = _runtime(AppKind.GROK)
+    second_provider = build_provider(
+        NewProvider(
+            app=AppKind.GROK,
+            name="Second Grok Provider",
+            endpoint="https://second.example.test/v1",
+            api_key="second-managed-secret-key",
+            model="second-model",
+            effort=None,
+            notes=None,
+        ),
+        _CODEX,
+    )
+    second = runtime_from_provider(second_provider)
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        """[models]
+default = "user-model"
+
+[model.user-model]
+model = "user-model"
+base_url = "https://user.example.test/v1"
+name = "User model"
+env_key = "USER_KEY"
+api_backend = "responses"
+context_window = 500000
+""",
+        encoding="utf-8",
+    )
+
+    first_profile = ensure_managed_config(first, tmp_path, None, None)
+    document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+    document["models"]["default"] = first_profile.name
+    config_path.write_text(tomlkit.dumps(document), encoding="utf-8")
+
+    second_profile = ensure_managed_config(second, tmp_path, None, None)
+    document = tomlkit.parse(config_path.read_text(encoding="utf-8"))
+
+    assert set(document["model"]) == {"user-model", second_profile.name}
+    assert first_profile.name not in document["model"]
+    assert document["models"].get("default") is None
 
 
 def test_grok_config_rejects_unmanaged_profile(tmp_path) -> None:

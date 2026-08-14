@@ -586,39 +586,77 @@ def test_provider_reset_defaults_to_dry_run(monkeypatch) -> None:
     provider = _provider()
 
     class Repository:
-        def list(self):
+        def list(self, apps):
+            assert apps == [AppKind.CLAUDE]
             return [provider]
 
-        def reset_non_official(self):
+        def reset_non_official(self, apps):
             raise AssertionError("Dry run must not delete providers.")
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
 
-    result = CliRunner().invoke(main, ["providers", "reset"])
+    result = CliRunner().invoke(main, ["providers", "reset", "claude"])
 
     assert result.exit_code == 0
     assert "would delete 1 non-official provider" in result.output
     assert "claude/Example Provider" in result.output
 
 
+def test_provider_reset_requires_app() -> None:
+    result = CliRunner().invoke(main, ["providers", "reset"])
+
+    assert result.exit_code != 0
+    assert "Missing argument" in result.output
+    assert "{claude|codex|grok}" in result.output
+
+
 def test_provider_reset_deletes_non_official_providers(monkeypatch) -> None:
     deleted = []
 
     class Repository:
-        def list(self):
+        def list(self, apps):
+            assert apps == [AppKind.CLAUDE]
             return []
 
-        def reset_non_official(self):
-            deleted.append(True)
+        def reset_non_official(self, apps):
+            deleted.append(apps)
             return 2
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
 
-    result = CliRunner().invoke(main, ["providers", "reset", "--no-dry-run"])
+    result = CliRunner().invoke(main, ["providers", "reset", "claude", "--no-dry-run"])
 
     assert result.exit_code == 0
-    assert deleted == [True]
+    assert deleted == [[AppKind.CLAUDE]]
     assert result.output == "Deleted 2 non-official providers.\n"
+
+
+def test_provider_reset_removes_deleted_codex_profiles(monkeypatch, tmp_path) -> None:
+    codex = _provider(AppKind.CODEX, "Codex")
+    claude = _provider(AppKind.CLAUDE, "Claude")
+    settings = _settings(tmp_path)
+    removed = []
+
+    class Repository:
+        def list(self, apps):
+            assert apps == [AppKind.CODEX]
+            return [codex, claude]
+
+        def reset_non_official(self, apps):
+            assert apps == [AppKind.CODEX]
+            return 2
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr(
+        "ccs_plus.cli.remove_managed_codex_profile",
+        lambda home, provider_id: removed.append((home, provider_id)),
+    )
+
+    result = CliRunner().invoke(main, ["providers", "reset", "codex", "--no-dry-run"])
+
+    assert result.exit_code == 0
+    assert removed == [(settings.codex.home, codex.id)]
 
 
 def test_provider_show_includes_unredacted_key_configuration(monkeypatch) -> None:
@@ -676,3 +714,35 @@ def test_provider_delete_uses_the_requested_app_and_id(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert deleted == [(AppKind.GROK, "grok-provider-id")]
+
+
+def test_provider_delete_removes_codex_profile(monkeypatch, tmp_path) -> None:
+    provider = _provider(AppKind.CODEX, "Codex Provider")
+    settings = _settings(tmp_path)
+    deleted = []
+    removed = []
+
+    class Repository:
+        def get_by_name(self, app, name):
+            assert app is AppKind.CODEX
+            assert name == provider.name
+            return provider
+
+        def delete(self, app, provider_id):
+            deleted.append((app, provider_id))
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr(
+        "ccs_plus.cli.remove_managed_codex_profile",
+        lambda home, provider_id: removed.append((home, provider_id)),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["providers", "delete", "codex", provider.name, "--yes"],
+    )
+
+    assert result.exit_code == 0
+    assert deleted == [(AppKind.CODEX, provider.id)]
+    assert removed == [(settings.codex.home, provider.id)]

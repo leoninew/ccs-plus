@@ -293,6 +293,7 @@ def _ensure_grok_model(
         if model_tables is None:
             model_tables = tomlkit.table()
             document["model"] = model_tables
+        _remove_stale_managed_grok_models(models, model_tables, profile)
         target = tomlkit.table()
         target["model"] = model or _required(runtime.model, "Grok model")
         target["base_url"] = _required(runtime.endpoint, "Grok provider endpoint")
@@ -303,6 +304,33 @@ def _ensure_grok_model(
         model_tables[profile] = target
         _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
     return ManagedProfile(name=profile, env_key=env_key)
+
+
+def _remove_stale_managed_grok_models(
+    models: MutableMapping[str, object],
+    model_tables: MutableMapping[str, object],
+    current_profile: str,
+) -> None:
+    for name, value in list(model_tables.items()):
+        if name == current_profile or not _is_managed_grok_model(name, value):
+            continue
+        del model_tables[name]
+        if models.get("default") == name:
+            models.pop("default", None)
+
+
+def _is_managed_grok_model(name: object, value: object) -> bool:
+    if not isinstance(name, str) or not isinstance(value, Mapping):
+        return False
+    digest = name.removeprefix("ccs-plus-grok-")
+    if len(digest) != 16 or any(character not in "0123456789abcdef" for character in digest):
+        return False
+    env_key = value.get("env_key")
+    return (
+        isinstance(env_key, str)
+        and env_key.startswith("CCS_PLUS_GROK_")
+        and env_key.endswith("_API_KEY")
+    )
 
 
 def _unmanaged_grok_profile(
@@ -328,7 +356,35 @@ def _unmanaged_grok_profile(
 
 
 def _managed_name(runtime: RuntimeProvider, suffix: str) -> str:
-    digest = sha256(runtime.provider.id.encode("utf-8")).hexdigest()[:16]
+    return _managed_name_for_provider_id(runtime.provider.id, suffix)
+
+
+def remove_managed_codex_profile(state_home: Path, provider_id: str) -> bool:
+    """Remove one ccs-plus-owned Codex profile after its provider is deleted."""
+    profile = _managed_name_for_provider_id(provider_id, "codex")
+    path = state_home / f"{profile}.config.toml"
+    marker = f"ccs-plus-managed: codex:{provider_id}"
+    with _locked(path):
+        if not path.is_file():
+            return False
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Unable to read Codex profile for cleanup %s: %s", path, exc)
+            return False
+        if marker not in content:
+            logger.warning("Refusing to delete unmanaged Codex profile: %s", path)
+            return False
+        try:
+            path.unlink()
+        except OSError as exc:
+            logger.warning("Unable to delete Codex profile %s: %s", path, exc)
+            return False
+    return True
+
+
+def _managed_name_for_provider_id(provider_id: str, suffix: str) -> str:
+    digest = sha256(provider_id.encode("utf-8")).hexdigest()[:16]
     return f"ccs-plus-{suffix}-{digest}"
 
 
