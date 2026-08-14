@@ -11,12 +11,15 @@ from tomlkit import TOMLDocument
 
 from ccs_plus.domain import (
     AppKind,
+    ClaudeRuntime,
     CodexAppConfig,
+    CodexRuntime,
+    GrokRuntime,
     NewProvider,
     Provider,
     ProviderDisplay,
     ProviderError,
-    RuntimeProvider,
+    RuntimeConfig,
 )
 
 
@@ -43,15 +46,9 @@ def build_provider(value: NewProvider, codex: CodexAppConfig) -> Provider:
     )
 
 
-def runtime_from_provider(provider: Provider) -> RuntimeProvider:
+def runtime_from_provider(provider: Provider) -> RuntimeConfig:
     if provider.is_official:
-        return RuntimeProvider(
-            provider=provider,
-            endpoint=None,
-            api_key=None,
-            model=None,
-            effort=None,
-        )
+        return _official_runtime(provider)
     if provider.app is AppKind.CLAUDE:
         return _claude_runtime(provider)
     if provider.app is AppKind.CODEX:
@@ -134,7 +131,33 @@ def _new_grok_settings(value: NewProvider) -> dict[str, Any]:
     return {"config": tomlkit.dumps(document)}
 
 
-def _claude_runtime(provider: Provider) -> RuntimeProvider:
+def _official_runtime(provider: Provider) -> RuntimeConfig:
+    if provider.app is AppKind.CLAUDE:
+        return ClaudeRuntime(
+            provider=provider,
+            endpoint=None,
+            api_key=None,
+            model=None,
+            effort=None,
+        )
+    if provider.app is AppKind.CODEX:
+        return CodexRuntime(
+            provider=provider,
+            endpoint=None,
+            api_key=None,
+            model=None,
+            effort=None,
+        )
+    return GrokRuntime(
+        provider=provider,
+        endpoint=None,
+        api_key=None,
+        model=None,
+        effort=None,
+    )
+
+
+def _claude_runtime(provider: Provider) -> ClaudeRuntime:
     env = _mapping(provider.settings_config.get("env"), "Claude env")
     values: dict[str, str] = {}
     for key, value in env.items():
@@ -146,7 +169,7 @@ def _claude_runtime(provider: Provider) -> RuntimeProvider:
     model = values.get("ANTHROPIC_MODEL") or values.get("ANTHROPIC_DEFAULT_SONNET_MODEL")
     _require(endpoint, "Claude ANTHROPIC_BASE_URL")
     _require(api_key, "Claude API key")
-    return RuntimeProvider(
+    return ClaudeRuntime(
         provider=provider,
         endpoint=endpoint,
         api_key=api_key,
@@ -167,7 +190,7 @@ def _display_claude_configuration(provider: Provider) -> ProviderDisplay:
     )
 
 
-def _codex_runtime(provider: Provider) -> RuntimeProvider:
+def _codex_runtime(provider: Provider) -> CodexRuntime:
     document = _parse_toml(provider, "Codex")
     provider_id = _as_string(_value(document.get("model_provider")))
     providers = document.get("model_providers")
@@ -186,7 +209,7 @@ def _codex_runtime(provider: Provider) -> RuntimeProvider:
         raise ProviderError(f"Codex provider {provider.id} does not use Responses API.")
     _require(endpoint, "Codex provider base_url")
     _require(api_key, "Codex API key")
-    return RuntimeProvider(
+    return CodexRuntime(
         provider=provider,
         endpoint=endpoint,
         api_key=api_key,
@@ -213,7 +236,7 @@ def _display_codex_configuration(provider: Provider) -> ProviderDisplay:
     )
 
 
-def _grok_runtime(provider: Provider) -> RuntimeProvider:
+def _grok_runtime(provider: Provider) -> GrokRuntime:
     config_text = _as_string(provider.settings_config.get("config"))
     if not config_text:
         raise ProviderError(f"Grok provider {provider.id} has no settings_config.config.")
@@ -235,7 +258,7 @@ def _grok_runtime(provider: Provider) -> RuntimeProvider:
         raise ProviderError(f"Grok provider {provider.id} does not use Responses API.")
     _require(endpoint, "Grok provider base_url")
     _require(api_key, "Grok API key")
-    return RuntimeProvider(
+    return GrokRuntime(
         provider=provider,
         endpoint=endpoint,
         api_key=api_key,

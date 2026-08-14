@@ -34,7 +34,7 @@ from prompt_toolkit.validation import ValidationError, Validator
 from prompt_toolkit.widgets import Box, TextArea
 
 from ccs_plus.adapters import display_configuration, runtime_from_provider
-from ccs_plus.domain import AppKind, Provider, ProviderError
+from ccs_plus.domain import AppKind, CodexRuntime, Provider, ProviderError
 from ccs_plus.home_visibility import link_codex_sessions
 from ccs_plus.launch_history import LaunchHistory
 from ccs_plus.sessions import Session, list_sessions
@@ -330,8 +330,9 @@ class _LaunchScreen:
             except ProviderError:
                 pass
             else:
-                policy = runtime.approval_policy or policy
-                sandbox = runtime.sandbox_mode or sandbox
+                if isinstance(runtime, CodexRuntime):
+                    policy = runtime.approval_policy or policy
+                    sandbox = runtime.sandbox_mode or sandbox
         return policy, sandbox
 
     def _sync_permission_selection(self) -> None:
@@ -740,8 +741,9 @@ class _LaunchScreen:
             "sessions": getattr(self, "_sessions_window", None),
         }.get(pane)
         info = getattr(win, "render_info", None) if win is not None else None
-        if info is not None:
-            return max(12, info.window_width + 2)
+        width = getattr(info, "window_width", None) if info is not None else None
+        if isinstance(width, int):
+            return max(12, width + 2)
         return default
 
     def _highlighted_frame(self, body: Any, pane: str, label: str) -> Any:
@@ -836,8 +838,8 @@ class _LaunchScreen:
             lines.append((sub_style, sub_text))
         else:
             # 3-tuple fragments register per-cell mouse handlers in FormattedTextControl.
-            lines.append((style, title_text, mouse_handler))  # type: ignore[arg-type]
-            lines.append((sub_style, sub_text, mouse_handler))  # type: ignore[arg-type]
+            lines.append((style, title_text, mouse_handler))
+            lines.append((sub_style, sub_text, mouse_handler))
 
     def _session_lines(self) -> StyleAndTextTuples:
         lines: StyleAndTextTuples = []
@@ -910,7 +912,7 @@ class _LaunchScreen:
                     get_app().invalidate()
                 return None
 
-            lines.append((style, f" {marker}{app.value}\n", handler))  # type: ignore[arg-type]
+            lines.append((style, f" {marker}{app.value}\n", handler))
         return lines
 
     def _provider_lines(self) -> StyleAndTextTuples:
@@ -983,8 +985,8 @@ class _LaunchScreen:
                     get_app().invalidate()
                 return None
 
-            lines.append((style, f" {marker}{preset.label}\n", handler))  # type: ignore[arg-type]
-            lines.append((sub_style, f"    {preset.description}\n", handler))  # type: ignore[arg-type]
+            lines.append((style, f" {marker}{preset.label}\n", handler))
+            lines.append((sub_style, f"    {preset.description}\n", handler))
         return lines
 
     def _button_text(self) -> StyleAndTextTuples:
@@ -1084,9 +1086,9 @@ class _LaunchScreen:
                 return None
 
             return [
-                (launch, "  ▶ Launch  ", launch_handler),  # type: ignore[list-item]
+                (launch, "  ▶ Launch  ", launch_handler),
                 ("", "   "),
-                (cancel, "  ✕ Cancel  ", cancel_handler),  # type: ignore[list-item]
+                (cancel, "  ✕ Cancel  ", cancel_handler),
                 ("", "\n"),
             ]
 

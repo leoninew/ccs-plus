@@ -83,16 +83,40 @@ class CodexAppConfig:
 
 @dataclass(frozen=True)
 class RuntimeProvider:
+    """Common connection and model data shared by every native CLI."""
+
     provider: Provider
     endpoint: str | None
     api_key: str | None
     model: str | None
     effort: str | None
+
+
+@dataclass(frozen=True)
+class ClaudeRuntime(RuntimeProvider):
+    """Claude-specific environment and permission settings."""
+
     claude_env: dict[str, str] = field(default_factory=dict)
     permission_mode: str | None = None
+
+
+@dataclass(frozen=True)
+class CodexRuntime(RuntimeProvider):
+    """Codex-specific permission settings."""
+
     approval_policy: str | None = None
     sandbox_mode: str | None = None
+
+
+@dataclass(frozen=True)
+class GrokRuntime(RuntimeProvider):
+    """Grok-specific sandbox and approval settings."""
+
+    sandbox_mode: str | None = None
     always_approve: bool | None = None
+
+
+RuntimeConfig = ClaudeRuntime | CodexRuntime | GrokRuntime
 
 
 @dataclass(frozen=True)

@@ -4,7 +4,16 @@ import pytest
 import tomlkit
 
 from ccs_plus.adapters import build_provider, display_configuration, runtime_from_provider
-from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider, ProviderError
+from ccs_plus.domain import (
+    AppKind,
+    ClaudeRuntime,
+    CodexAppConfig,
+    CodexRuntime,
+    GrokRuntime,
+    NewProvider,
+    Provider,
+    ProviderError,
+)
 
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
 
@@ -26,6 +35,20 @@ def test_build_claude_provider_keeps_effort_in_cc_switch_shape() -> None:
     assert provider.settings_config["effortLevel"] == "high"
     assert provider.settings_config["env"]["ANTHROPIC_AUTH_TOKEN"] == "test-secret-key"
     assert runtime_from_provider(provider).effort == "high"
+
+
+@pytest.mark.parametrize(
+    ("app", "runtime_type"),
+    [
+        (AppKind.CLAUDE, ClaudeRuntime),
+        (AppKind.CODEX, CodexRuntime),
+        (AppKind.GROK, GrokRuntime),
+    ],
+)
+def test_runtime_uses_an_app_specific_type(app: AppKind, runtime_type: type[object]) -> None:
+    runtime = runtime_from_provider(build_provider(_new_value(app), _CODEX))
+
+    assert isinstance(runtime, runtime_type)
 
 
 def test_build_codex_provider_uses_responses_api_and_app_defaults() -> None:

@@ -15,7 +15,7 @@ import portalocker
 import tomlkit
 from tomlkit import TOMLDocument
 
-from ccs_plus.domain import AppKind, ProviderError, RuntimeProvider
+from ccs_plus.domain import CodexRuntime, GrokRuntime, ProviderError, RuntimeProvider
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ class ManagedProfile:
 
 
 def ensure_managed_config(
-    runtime: RuntimeProvider,
+    runtime: CodexRuntime | GrokRuntime,
     state_home: Path,
     model: str | None,
     effort: str | None,
@@ -45,7 +45,7 @@ def ensure_managed_config(
     approval_policy: str | None = None,
     sandbox_mode: str | None = None,
 ) -> ManagedProfile:
-    if runtime.provider.app is AppKind.CODEX:
+    if isinstance(runtime, CodexRuntime):
         return _ensure_codex_profile(
             runtime,
             state_home,
@@ -60,13 +60,12 @@ def ensure_managed_config(
             approval_policy=approval_policy,
             sandbox_mode=sandbox_mode,
         )
-    if runtime.provider.app is AppKind.GROK:
+    if isinstance(runtime, GrokRuntime):
         return _ensure_grok_model(runtime, state_home, model, effort)
-    raise ProviderError("Claude does not need a persistent managed configuration.")
 
 
 def _ensure_codex_profile(
-    runtime: RuntimeProvider,
+    runtime: CodexRuntime,
     state_home: Path,
     model: str | None,
     effort: str | None,
@@ -243,10 +242,7 @@ def _permission_profile(sandbox_mode: str) -> str:
     ``:danger-full-access``. The historical sandbox key ``workspace-write``
     maps to ``:workspace``.
     """
-    if sandbox_mode.startswith(":"):
-        name = sandbox_mode[1:]
-    else:
-        name = sandbox_mode
+    name = sandbox_mode[1:] if sandbox_mode.startswith(":") else sandbox_mode
     aliases = {
         "workspace-write": "workspace",
         "workspace_write": "workspace",
@@ -264,7 +260,7 @@ def _parse_codex_profile(content: str, path: Path) -> TOMLDocument:
 
 
 def _ensure_grok_model(
-    runtime: RuntimeProvider, state_home: Path, model: str | None, effort: str | None
+    runtime: GrokRuntime, state_home: Path, model: str | None, effort: str | None
 ) -> ManagedProfile:
     profile = _managed_name(runtime, "grok")
     env_key = _managed_env_key(runtime, "GROK")

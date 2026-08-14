@@ -76,21 +76,24 @@ def test_launch_specs_keep_secret_out_of_argv_and_use_expected_home(
     expected_home = state_home
     assert spec.env[state_key] == str(expected_home)
     assert spec.cwd == tmp_path.resolve()
-    assert "--effort" not in spec.argv
     if app is AppKind.GROK:
         profile_name = spec.argv[spec.argv.index("--model") + 1]
         document = tomlkit.parse(
             (Path(spec.env["GROK_HOME"]) / "config.toml").read_text(encoding="utf-8")
         )
-        assert "--reasoning-effort" not in spec.argv
+        assert spec.argv[spec.argv.index("--reasoning-effort") + 1] == "xhigh"
         assert document["models"]["default_reasoning_effort"] == "xhigh"
         assert document["model"][profile_name]["model"] == "example-model"
     if app is AppKind.CLAUDE:
         assert "--model" not in spec.argv
+        assert spec.argv[spec.argv.index("--effort") + 1] == "high"
         assert spec.env["ANTHROPIC_MODEL"] == "example-model"
         assert spec.env["CLAUDE_CODE_EFFORT_LEVEL"] == "high"
     if app is AppKind.CODEX:
-        assert "--model" not in spec.argv
+        assert spec.argv[spec.argv.index("--model") + 1] == "example-model"
+        assert (
+            spec.argv[spec.argv.index("-c") + 1] == "model_reasoning_effort=high"
+        )
         assert "CODEX_SQLITE_HOME" not in spec.env
         assert "--sandbox" not in spec.argv
         assert "--dangerously-bypass-approvals-and-sandbox" not in spec.argv
@@ -318,15 +321,27 @@ def test_launch_overrides_provider_model_and_effort_without_native_override_args
         effort_override=effort,
     )
 
-    assert "--effort" not in spec.argv
-    assert "--reasoning-effort" not in spec.argv
     if app is AppKind.CLAUDE:
-        assert spec.argv == ("native-cli", "--permission-mode", "bypassPermissions")
+        assert spec.argv == (
+            "native-cli",
+            "--effort",
+            effort,
+            "--permission-mode",
+            "bypassPermissions",
+        )
         assert spec.env["ANTHROPIC_MODEL"] == "one-time-model"
         assert spec.env["CLAUDE_CODE_EFFORT_LEVEL"] == effort
     elif app is AppKind.CODEX:
         profile_name = spec.argv[spec.argv.index("--profile") + 1]
-        assert spec.argv == ("native-cli", "--profile", profile_name)
+        assert spec.argv == (
+            "native-cli",
+            "--profile",
+            profile_name,
+            "--model",
+            "one-time-model",
+            "-c",
+            f"model_reasoning_effort={effort}",
+        )
         profile = Path(spec.env["CODEX_HOME"]) / f"{profile_name}.config.toml"
         profile_text = profile.read_text(encoding="utf-8")
         assert 'model = "one-time-model"' in profile_text
@@ -337,6 +352,8 @@ def test_launch_overrides_provider_model_and_effort_without_native_override_args
             "native-cli",
             "--model",
             profile_name,
+            "--reasoning-effort",
+            effort,
             "--sandbox",
             "workspace",
             "--always-approve",
@@ -386,6 +403,7 @@ def test_codex_resume_uses_session_cwd_and_resume_subcommand(tmp_path, monkeypat
     assert spec.cwd == work.resolve()
     assert spec.argv[0:3] == ("native-codex", "resume", "sid-123")
     assert "--profile" in spec.argv
+    assert spec.argv[spec.argv.index("--model") + 1] == "example-model"
     profile_name = spec.argv[spec.argv.index("--profile") + 1]
     profile_text = (Path(spec.env["CODEX_HOME"]) / f"{profile_name}.config.toml").read_text(
         encoding="utf-8"
@@ -628,7 +646,8 @@ def test_launch_specs_share_the_app_home_across_providers(tmp_path, monkeypatch,
         )
         assert first_document["model_provider"] == settings.codex.session_model_provider
         assert second_document["model_provider"] == settings.codex.session_model_provider
-        assert "--model" not in first_spec.argv
+        assert first_spec.argv[first_spec.argv.index("--model") + 1] == "first-model"
+        assert second_spec.argv[second_spec.argv.index("--model") + 1] == "second-model"
         assert "--ask-for-approval" not in first_spec.argv
 
 
