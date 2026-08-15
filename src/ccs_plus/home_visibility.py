@@ -40,6 +40,14 @@ class HomeVisibility:
 
 
 @dataclass(frozen=True)
+class DisabledHomeVisibility(HomeVisibility):
+    """Disable user-home propagation for launches rooted at the user Home."""
+
+    def apply(self) -> None:
+        pass
+
+
+@dataclass(frozen=True)
 class ClaudeHomeVisibility(HomeVisibility):
     plugin_copy_names: Collection[str] = ()
     plugin_skip_names: Collection[str] = ()
@@ -196,8 +204,12 @@ def home_visibility_for(
     settings: AppSettings,
     state_home: Path,
     project_directory: Path | None = None,
+    *,
+    enabled: bool = True,
 ) -> HomeVisibility:
     """Build the visibility policy matching *runtime*."""
+    if not enabled:
+        return DisabledHomeVisibility(state_home=state_home, user_home=None)
     if isinstance(runtime, ClaudeRuntime):
         return ClaudeHomeVisibility(
             state_home=state_home,

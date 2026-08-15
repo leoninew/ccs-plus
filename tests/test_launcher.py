@@ -12,7 +12,7 @@ from conftest import make_app_settings
 from ccs_plus.adapters import build_provider
 from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider, ProviderError
 from ccs_plus.home_visibility import _is_link, _links_to
-from ccs_plus.launcher import LaunchSpec, build_launch_spec, launch
+from ccs_plus.launcher import LaunchSpec, _is_user_home_directory, build_launch_spec, launch
 from ccs_plus.settings import AppSettings
 
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
@@ -734,6 +734,36 @@ command = "state"
     assert document["mcp_servers"]["shared"]["command"] == "user"
     assert document["mcp_servers"]["state-only"]["command"] == "state"
     assert document["mcp_servers"]["user-only"]["command"] == "user"
+
+
+@pytest.mark.parametrize("app", AppKind)
+def test_launch_from_user_home_disables_home_visibility(
+    tmp_path, monkeypatch, app: AppKind
+) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-cli")
+    monkeypatch.setattr("ccs_plus.launcher._is_user_home_directory", lambda _: True)
+    settings = make_app_settings(tmp_path)
+    user_homes = {
+        AppKind.CLAUDE: settings.claude.user_home,
+        AppKind.CODEX: settings.codex.user_home,
+        AppKind.GROK: settings.grok.user_home,
+    }
+    user_home = user_homes[app]
+    assert user_home is not None
+    (user_home / "skills" / "shared-skill").mkdir(parents=True)
+
+    build_launch_spec(_provider(app), settings, tmp_path)
+
+    state_home = settings.state_home(app.value)
+    assert not (state_home / "skills" / "shared-skill").exists()
+
+
+def test_user_home_detection_does_not_match_descendant_projects(tmp_path) -> None:
+    project = tmp_path / "projects" / "demo"
+    project.mkdir(parents=True)
+
+    assert _is_user_home_directory(tmp_path, user_home=tmp_path)
+    assert not _is_user_home_directory(project, user_home=tmp_path)
 
 
 def test_launch_logs_argv_and_exit_code_without_environment(monkeypatch, tmp_path, caplog) -> None:

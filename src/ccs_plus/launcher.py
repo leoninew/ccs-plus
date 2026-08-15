@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -16,7 +17,7 @@ from ccs_plus.domain import (
     RuntimeConfig,
     validate_launch_options,
 )
-from ccs_plus.home_visibility import CodexHomeVisibility, home_visibility_for
+from ccs_plus.home_visibility import HomeVisibility, home_visibility_for
 from ccs_plus.managed_config import ensure_managed_config
 from ccs_plus.sessions import Session
 from ccs_plus.settings import AppSettings, environment_with_defaults
@@ -101,7 +102,7 @@ class CodexLauncher(RuntimeLauncher):
     session_model_provider: str
     approval_policy: str
     sandbox_mode: str
-    visibility: CodexHomeVisibility
+    visibility: HomeVisibility
 
     def build(self) -> list[str]:
         _clear(self.env, "CODEX_HOME", "CODEX_SQLITE_HOME")
@@ -206,6 +207,7 @@ def build_launch_spec(
         settings,
         state_home,
         project_directory=working_directory,
+        enabled=not _is_user_home_directory(working_directory),
     )
     visibility.apply()
     model = model_override or runtime.model
@@ -237,7 +239,7 @@ def runtime_launcher_for(
     effort: str | None,
     session_id: str | None,
     settings: AppSettings,
-    visibility: object,
+    visibility: HomeVisibility,
 ) -> RuntimeLauncher:
     if isinstance(runtime, ClaudeRuntime):
         return ClaudeLauncher(
@@ -251,8 +253,6 @@ def runtime_launcher_for(
             permission_mode=_required(runtime.permission_mode, "Claude permission_mode"),
         )
     if isinstance(runtime, CodexRuntime):
-        if not isinstance(visibility, CodexHomeVisibility):
-            raise ProviderError("Codex runtime received incompatible home visibility.")
         return CodexLauncher(
             executable=executable,
             env=env,
@@ -308,3 +308,11 @@ def _clear(env: dict[str, str], *keys: str) -> None:
 def _apply_proxy(env: dict[str, str], proxy: str) -> None:
     for key in PROXY_ENV_KEYS:
         env[key] = proxy
+
+
+def _is_user_home_directory(path: Path, user_home: Path | None = None) -> bool:
+    """Return whether *path* is the operating-system user Home itself."""
+    home = user_home or Path.home()
+    return os.path.normcase(os.fspath(path.resolve())) == os.path.normcase(
+        os.fspath(home.resolve())
+    )
