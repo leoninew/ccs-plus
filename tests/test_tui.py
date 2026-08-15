@@ -16,10 +16,13 @@ from prompt_toolkit.output import DummyOutput
 from ccs_plus.adapters import build_provider
 from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider
 from ccs_plus.launch_history import LaunchHistory
-from ccs_plus.tui import APPROVAL_PRESETS, LaunchPlan, run_launcher
+from ccs_plus.tui import PERMISSION_PRESETS, LaunchPlan, run_launcher
 
 _T = TypeVar("_T")
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
+
+# app → provider → dir → permissions → sessions → buttons
+_NEW_SESSION_KEYS = "\r\r\r\r\r\r"
 
 
 def _drive(func: Callable[[], _T], keys: str, *, delay: float = 0.35) -> _T:
@@ -68,22 +71,21 @@ def test_launcher_escape_cancels(tmp_path: Path) -> None:
 
 def test_launcher_default_path_launches_new_session(tmp_path: Path) -> None:
     provider = _provider(AppKind.CLAUDE)
-    # focus starts on app → enter → provider → enter → dir → enter
-    # → sessions (new) → enter → buttons Launch → enter
-    keys = "\r\r\r\r\r"
-    plan = _run(tmp_path, [provider], keys)
+    plan = _run(tmp_path, [provider], _NEW_SESSION_KEYS)
     assert plan is not None
     assert plan.provider.id == provider.id
     assert plan.cwd == tmp_path.resolve()
     assert plan.session is None
     assert plan.approval_policy is None
+    assert plan.permission_mode is None
+    assert plan.always_approve is None
 
 
 def test_launcher_keeps_provider_list_order_instead_of_sorting_by_name(tmp_path: Path) -> None:
     first = _provider(AppKind.CLAUDE, "Zulu")
     second = _provider(AppKind.CLAUDE, "Alpha")
 
-    plan = _run(tmp_path, [first, second], "\r\r\r\r\r")
+    plan = _run(tmp_path, [first, second], _NEW_SESSION_KEYS)
 
     assert plan is not None
     assert plan.provider.id == first.id
@@ -92,22 +94,63 @@ def test_launcher_keeps_provider_list_order_instead_of_sorting_by_name(tmp_path:
 def test_launcher_selects_codex_and_permission_preset(tmp_path: Path) -> None:
     claude = _provider(AppKind.CLAUDE, "Claude P")
     codex = _provider(AppKind.CODEX, "Codex P")
-    # app: down to codex → enter → provider enter → dir enter
-    # → permissions: down once (On request) → enter → sessions enter → Launch enter
-    keys = "\x1b[B\r\r\r\x1b[B\r\r\r"
+    presets = PERMISSION_PRESETS[AppKind.CODEX]
+    on_request = next(preset for preset in presets if preset.key == "on-request")
+    # app: down to codex → enter → provider → dir
+    # → permissions: down to On request (index 2) → sessions → Launch
+    keys = "\x1b[B\r\r\r\x1b[B\x1b[B\r\r\r"
     plan = _run(tmp_path, [claude, codex], keys)
     assert plan is not None
     assert plan.provider.app is AppKind.CODEX
-    assert plan.approval_policy == APPROVAL_PRESETS[1].approval_policy
-    assert plan.sandbox_mode == APPROVAL_PRESETS[1].sandbox_mode
+    assert plan.approval_policy == on_request.approval_policy
+    assert plan.sandbox_mode == on_request.sandbox_mode
 
 
-def test_codex_permission_presets_use_supported_approval_policies() -> None:
-    assert {preset.approval_policy for preset in APPROVAL_PRESETS} <= {
-        "never",
-        "on-request",
-        "on-failure",
+def test_permission_presets_match_native_cli_values() -> None:
+    claude_modes = {preset.permission_mode for preset in PERMISSION_PRESETS[AppKind.CLAUDE]}
+    assert claude_modes <= {
+        "acceptEdits",
+        "auto",
+        "bypassPermissions",
+        "manual",
+        "dontAsk",
+        "plan",
     }
+
+    codex_approvals = {preset.approval_policy for preset in PERMISSION_PRESETS[AppKind.CODEX]}
+    codex_sandboxes = {preset.sandbox_mode for preset in PERMISSION_PRESETS[AppKind.CODEX]}
+    assert codex_approvals <= {"never", "on-request", "untrusted"}
+    assert codex_sandboxes <= {"read-only", "workspace-write", "danger-full-access"}
+
+    grok_sandboxes = {preset.sandbox_mode for preset in PERMISSION_PRESETS[AppKind.GROK]}
+    assert grok_sandboxes <= {"off", "workspace", "devbox", "read-only", "strict"}
+    assert all(
+        isinstance(preset.always_approve, bool) for preset in PERMISSION_PRESETS[AppKind.GROK]
+    )
+
+
+def test_launcher_selects_claude_permission_preset(tmp_path: Path) -> None:
+    provider = _provider(AppKind.CLAUDE, "Claude P")
+    # Default preset is bypass (index 0). Move to plan (index 3).
+    # app -> provider -> dir -> permissions x3 down -> sessions -> launch
+    keys = "\r\r\r\x1b[B\x1b[B\x1b[B\r\r\r"
+    plan = _run(tmp_path, [provider], keys)
+    assert plan is not None
+    assert plan.permission_mode == "plan"
+    assert plan.approval_policy is None
+    assert plan.sandbox_mode is None
+
+
+def test_launcher_selects_grok_permission_preset(tmp_path: Path) -> None:
+    provider = _provider(AppKind.GROK, "Grok P")
+    # Default matches settings workspace+auto (index 1). Move to read-only (index 3).
+    # app -> provider -> dir -> permissions x2 down -> sessions -> launch
+    keys = "\r\r\r\x1b[B\x1b[B\r\r\r"
+    plan = _run(tmp_path, [provider], keys)
+    assert plan is not None
+    assert plan.sandbox_mode == "read-only"
+    assert plan.always_approve is False
+    assert plan.permission_mode is None
 
 
 def test_launcher_keeps_provider_permissions_without_explicit_override(tmp_path: Path) -> None:
@@ -125,12 +168,13 @@ def test_launcher_keeps_provider_permissions_without_explicit_override(tmp_path:
         }
     )
 
-    # app → provider → dir → permissions → sessions → buttons → launch
-    plan = _run(tmp_path, [provider], "\r\r\r\r\r\r")
+    plan = _run(tmp_path, [provider], _NEW_SESSION_KEYS)
 
     assert plan is not None
     assert plan.approval_policy is None
     assert plan.sandbox_mode is None
+    assert plan.permission_mode is None
+    assert plan.always_approve is None
 
 
 def _write_codex_session(

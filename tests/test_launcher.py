@@ -272,6 +272,20 @@ def test_claude_launch_uses_configured_permission_mode(tmp_path, monkeypatch) ->
     assert "--dangerously-skip-permissions" not in spec.argv
 
 
+def test_claude_launch_honors_permission_mode_override(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-claude")
+    settings = make_app_settings(tmp_path, claude_permission_mode="bypassPermissions")
+
+    spec = build_launch_spec(
+        _provider(AppKind.CLAUDE),
+        settings,
+        tmp_path,
+        permission_mode="plan",
+    )
+
+    assert spec.argv[-2:] == ("--permission-mode", "plan")
+
+
 def test_grok_launch_uses_configured_permission_settings(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-grok")
     settings = make_app_settings(
@@ -284,6 +298,26 @@ def test_grok_launch_uses_configured_permission_settings(tmp_path, monkeypatch) 
 
     assert "--sandbox" in spec.argv
     assert spec.argv[spec.argv.index("--sandbox") + 1] == "restricted"
+    assert "--always-approve" not in spec.argv
+
+
+def test_grok_launch_honors_sandbox_and_always_approve_override(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-grok")
+    settings = make_app_settings(
+        tmp_path,
+        grok_sandbox_mode="workspace",
+        grok_always_approve=True,
+    )
+
+    spec = build_launch_spec(
+        _provider(AppKind.GROK),
+        settings,
+        tmp_path,
+        sandbox_mode="read-only",
+        always_approve=False,
+    )
+
+    assert spec.argv[spec.argv.index("--sandbox") + 1] == "read-only"
     assert "--always-approve" not in spec.argv
 
 

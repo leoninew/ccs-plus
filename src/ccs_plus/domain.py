@@ -28,7 +28,7 @@ class AppKind(StrEnum):
 
     @property
     def supports_permission_overrides(self) -> bool:
-        return self is AppKind.CODEX
+        return True
 
     @property
     def has_managed_profile_files(self) -> bool:
@@ -125,19 +125,18 @@ class RuntimeProvider:
     model: str | None
     effort: str | None
 
-    def permission_overrides(self) -> tuple[str | None, str | None]:
-        return None, None
-
     def with_permission_defaults(self, settings: AppSettings) -> Self:
         return self
 
     def with_permission_override(
         self,
-        approval_policy: str | None,
-        sandbox_mode: str | None,
+        approval_policy: str | None = None,
+        sandbox_mode: str | None = None,
+        *,
+        permission_mode: str | None = None,
+        always_approve: bool | None = None,
     ) -> Self:
-        if approval_policy is not None or sandbox_mode is not None:
-            raise ProviderError("Permission overrides are not supported for this runtime.")
+        del approval_policy, sandbox_mode, permission_mode, always_approve
         return self
 
 
@@ -154,6 +153,19 @@ class ClaudeRuntime(RuntimeProvider):
             permission_mode=self.permission_mode or settings.claude.permission_mode,
         )
 
+    def with_permission_override(
+        self,
+        approval_policy: str | None = None,
+        sandbox_mode: str | None = None,
+        *,
+        permission_mode: str | None = None,
+        always_approve: bool | None = None,
+    ) -> Self:
+        del approval_policy, sandbox_mode, always_approve
+        if permission_mode is None:
+            return self
+        return replace(self, permission_mode=permission_mode)
+
 
 @dataclass(frozen=True)
 class CodexRuntime(RuntimeProvider):
@@ -161,9 +173,6 @@ class CodexRuntime(RuntimeProvider):
 
     approval_policy: str | None = None
     sandbox_mode: str | None = None
-
-    def permission_overrides(self) -> tuple[str | None, str | None]:
-        return self.approval_policy, self.sandbox_mode
 
     def with_permission_defaults(self, settings: AppSettings) -> Self:
         return replace(
@@ -174,9 +183,13 @@ class CodexRuntime(RuntimeProvider):
 
     def with_permission_override(
         self,
-        approval_policy: str | None,
-        sandbox_mode: str | None,
+        approval_policy: str | None = None,
+        sandbox_mode: str | None = None,
+        *,
+        permission_mode: str | None = None,
+        always_approve: bool | None = None,
     ) -> Self:
+        del permission_mode, always_approve
         return replace(
             self,
             approval_policy=(
@@ -200,6 +213,21 @@ class GrokRuntime(RuntimeProvider):
             always_approve=(
                 settings.grok.always_approve if self.always_approve is None else self.always_approve
             ),
+        )
+
+    def with_permission_override(
+        self,
+        approval_policy: str | None = None,
+        sandbox_mode: str | None = None,
+        *,
+        permission_mode: str | None = None,
+        always_approve: bool | None = None,
+    ) -> Self:
+        del approval_policy, permission_mode
+        return replace(
+            self,
+            sandbox_mode=sandbox_mode if sandbox_mode is not None else self.sandbox_mode,
+            always_approve=(always_approve if always_approve is not None else self.always_approve),
         )
 
 

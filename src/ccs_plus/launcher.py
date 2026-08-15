@@ -175,6 +175,8 @@ def build_launch_spec(
     resume: Session | None = None,
     approval_policy: str | None = None,
     sandbox_mode: str | None = None,
+    permission_mode: str | None = None,
+    always_approve: bool | None = None,
 ) -> LaunchSpec:
     if resume is not None and resume.app is not provider.app:
         raise ProviderError(
@@ -196,9 +198,18 @@ def build_launch_spec(
         raise ProviderError(f"{provider.app.executable} CLI was not found on PATH.")
 
     runtime = runtime_from_provider(provider).with_permission_defaults(settings)
-    # TUI exposes permission overrides only for Codex.
-    if approval_policy is not None or sandbox_mode is not None:
-        runtime = runtime.with_permission_override(approval_policy, sandbox_mode)
+    if (
+        approval_policy is not None
+        or sandbox_mode is not None
+        or permission_mode is not None
+        or always_approve is not None
+    ):
+        runtime = runtime.with_permission_override(
+            approval_policy,
+            sandbox_mode,
+            permission_mode=permission_mode,
+            always_approve=always_approve,
+        )
     env = environment_with_defaults()
     _apply_proxy(env, settings.proxy)
     state_home = settings.state_home(provider.app.value)

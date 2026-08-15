@@ -321,6 +321,8 @@ def _execute_plan(plan: LaunchPlan, settings: AppSettings, history: LaunchHistor
         resume=plan.session,
         approval_policy=plan.approval_policy,
         sandbox_mode=plan.sandbox_mode,
+        permission_mode=plan.permission_mode,
+        always_approve=plan.always_approve,
     )
     history.record_launch(plan.provider)
     exit_code = launch(spec)
