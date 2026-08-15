@@ -32,7 +32,71 @@
 
 ## 快速开始
 
-要求：Python 3.11+、[uv](https://docs.astral.sh/uv/)、cc-switch 数据库，以及 `PATH` 中的 `claude` / `codex` / `grok`。
+### 方式 A：下载二进制（推荐）
+
+发布 [GitHub Release](https://github.com/leoninew/ccs-plus/releases) 后会**自动**构建并上传多平台单文件；无需 Python / uv。
+
+**Linux x86_64**
+
+```bash
+curl -fsSL -o ccs-plus \
+  "https://github.com/leoninew/ccs-plus/releases/latest/download/ccs-plus-linux-x86_64"
+chmod +x ccs-plus
+sudo install -m 755 ccs-plus /usr/local/bin/ccs-plus
+ccs-plus --help
+```
+
+**macOS（Apple Silicon）**
+
+```bash
+curl -fsSL -o ccs-plus \
+  "https://github.com/leoninew/ccs-plus/releases/latest/download/ccs-plus-macos-arm64"
+chmod +x ccs-plus
+# 首次运行若被拦截：系统设置 → 隐私与安全性 → 仍要打开
+sudo install -m 755 ccs-plus /usr/local/bin/ccs-plus
+```
+
+**macOS（Intel）**
+
+```bash
+curl -fsSL -o ccs-plus \
+  "https://github.com/leoninew/ccs-plus/releases/latest/download/ccs-plus-macos-x86_64"
+chmod +x ccs-plus
+sudo install -m 755 ccs-plus /usr/local/bin/ccs-plus
+```
+
+**Windows（PowerShell）**
+
+```powershell
+$dir = "$env:LOCALAPPDATA\ccs-plus"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+Invoke-WebRequest -Uri "https://github.com/leoninew/ccs-plus/releases/latest/download/ccs-plus-windows-x86_64.exe" `
+  -OutFile "$dir\ccs-plus.exe"
+# 可选：把 $dir 加入用户 PATH
+$env:Path = "$dir;$env:Path"
+ccs-plus --help
+```
+
+**更新到最新版**（覆盖安装即可）：
+
+```bash
+# Linux / macOS：重复上面的 curl + install 即可
+curl -fsSL -o ccs-plus \
+  "https://github.com/leoninew/ccs-plus/releases/latest/download/ccs-plus-linux-x86_64"
+sudo install -m 755 ccs-plus /usr/local/bin/ccs-plus
+```
+
+```powershell
+# Windows：重新下载覆盖
+Invoke-WebRequest -Uri "https://github.com/leoninew/ccs-plus/releases/latest/download/ccs-plus-windows-x86_64.exe" `
+  -OutFile "$env:LOCALAPPDATA\ccs-plus\ccs-plus.exe"
+```
+
+仍需本机已安装 `claude` / `codex` / `grok`，并配置好 `settings.yaml` 与 cc-switch 数据库。
+
+### 方式 B：从源码安装（开发）
+
+要求：Python 3.11+、[uv](https://docs.astral.sh/uv/)。
 
 ```bash
 make install
@@ -118,17 +182,29 @@ uv run ccs-plus launch grok --provider "<provider-name>" --model "<model-id>" --
 
 导出为 JSON 外壳 + Fernet 加密 API Key。`providers show` 会输出明文 Key，仅在可信终端使用。
 
-### 本地二进制
+### 发布与二进制构建
+
+**自动触发：** 在 GitHub 上 **Publish release**（创建并发布带 tag 的 Release，例如 `v0.2.0`）后，Actions 工作流 [`Release binaries`](.github/workflows/release-binaries.yml) 会自动：
+
+1. 在 Linux / macOS arm64 / macOS x86_64 / Windows 上用 PyInstaller 打单文件
+2. 将产物挂到该 Release 的 Assets
+
+产物文件名：
+
+| 文件 | 平台 |
+| --- | --- |
+| `ccs-plus-linux-x86_64` | Linux x86_64 |
+| `ccs-plus-macos-arm64` | macOS Apple Silicon |
+| `ccs-plus-macos-x86_64` | macOS Intel |
+| `ccs-plus-windows-x86_64.exe` | Windows x86_64 |
+
+**手动重跑：** Actions → Release binaries → Run workflow → 填写已有 tag。
+
+**本地自建：**
 
 ```bash
 make binary    # dist/ccs-plus （Windows: dist/ccs-plus.exe）
 ```
-
-发布 GitHub Release（tag）时，Actions 会自动构建并上传：
-
-- `ccs-plus-linux-x86_64`
-- `ccs-plus-macos-arm64` / `ccs-plus-macos-x86_64`
-- `ccs-plus-windows-x86_64.exe`
 
 ## 运行模型
 
