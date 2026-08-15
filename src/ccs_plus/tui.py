@@ -35,7 +35,7 @@ from prompt_toolkit.widgets import Box, TextArea
 
 from ccs_plus.adapters import display_configuration, runtime_from_provider
 from ccs_plus.domain import AppKind, CodexRuntime, Provider, ProviderError
-from ccs_plus.home_visibility import link_codex_sessions
+from ccs_plus.home_visibility import CodexHomeVisibility
 from ccs_plus.launch_history import LaunchHistory
 from ccs_plus.sessions import Session, list_sessions
 from ccs_plus.settings import AppSettings
@@ -380,7 +380,10 @@ class _LaunchScreen:
         if app not in self._sessions_cache:
             if app is AppKind.CODEX:
                 with contextlib.suppress(OSError):
-                    link_codex_sessions(self.settings.codex.home, self.settings.codex.user_home)
+                    CodexHomeVisibility(
+                        self.settings.codex.home,
+                        self.settings.codex.user_home,
+                    ).expose_sessions()
             self._sessions_cache[app] = list_sessions(self.settings, app)
         return self._sessions_cache[app]
 

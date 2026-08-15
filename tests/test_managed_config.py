@@ -4,7 +4,8 @@ import pytest
 import tomlkit
 
 from ccs_plus.adapters import build_provider, runtime_from_provider
-from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, ProviderError
+from ccs_plus.domain import AppKind, CodexAppConfig, CodexRuntime, NewProvider, ProviderError
+from ccs_plus.home_visibility import CodexHomeVisibility
 from ccs_plus.managed_config import (
     ensure_managed_config as _ensure_managed_config,
 )
@@ -16,6 +17,14 @@ _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-acces
 
 
 def ensure_managed_config(*args, **kwargs):
+    user_home = kwargs.pop("user_home", None)
+    project_directory = kwargs.pop("project_directory", None)
+    if isinstance(args[0], CodexRuntime) and "visibility" not in kwargs:
+        kwargs["visibility"] = CodexHomeVisibility(
+            state_home=args[1],
+            user_home=user_home,
+            project_directory=project_directory,
+        )
     return _ensure_managed_config(
         *args,
         session_model_provider="ccs-plus-managed",
@@ -309,11 +318,11 @@ def test_codex_profile_ignores_invalid_user_config(tmp_path, caplog) -> None:
     user_home.mkdir()
     (user_home / "config.toml").write_text("[[[not toml", encoding="utf-8")
 
-    with caplog.at_level(logging.WARNING, logger="ccs_plus.managed_config"):
+    with caplog.at_level(logging.WARNING, logger="ccs_plus.home_visibility"):
         profile = ensure_managed_config(runtime, tmp_path, None, None, user_home=user_home)
 
     document = tomlkit.parse((tmp_path / f"{profile.name}.config.toml").read_text(encoding="utf-8"))
-    assert "Skipping Codex user config merge" in caplog.text
+    assert "Skipping Codex user config" in caplog.text
     assert "mcp_servers" not in document
     assert document["model_provider"] == "ccs-plus-managed"
 

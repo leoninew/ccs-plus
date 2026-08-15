@@ -16,12 +16,8 @@ from ccs_plus.domain import (
     RuntimeConfig,
     validate_launch_options,
 )
-from ccs_plus.home_visibility import apply_claude_visibility, apply_codex_visibility
-from ccs_plus.managed_config import (
-    ensure_managed_config,
-    sync_codex_user_config,
-    sync_grok_user_mcp_servers,
-)
+from ccs_plus.home_visibility import CodexHomeVisibility, home_visibility_for
+from ccs_plus.managed_config import ensure_managed_config
 from ccs_plus.sessions import Session
 from ccs_plus.settings import AppSettings, environment_with_defaults
 
@@ -88,18 +84,18 @@ def build_launch_spec(
     env = environment_with_defaults()
     _apply_proxy(env, settings.proxy)
     state_home = settings.state_home(provider.app.value)
+    visibility = home_visibility_for(
+        runtime,
+        settings,
+        state_home,
+        project_directory=working_directory,
+    )
+    visibility.apply()
     model = model_override or runtime.model
     effort = effort_override or runtime.effort
     session_id = resume.session_id if resume is not None else None
 
     if isinstance(runtime, ClaudeRuntime):
-        if settings.claude.user_home is not None:
-            apply_claude_visibility(
-                state_home,
-                settings.claude.user_home,
-                plugin_copy_names=settings.claude.plugin_copy_names,
-                plugin_skip_names=settings.claude.plugin_skip_names,
-            )
         argv = _claude_spec(
             executable,
             runtime,
@@ -111,7 +107,8 @@ def build_launch_spec(
             session_id=session_id,
         )
     elif isinstance(runtime, CodexRuntime):
-        apply_codex_visibility(state_home, settings.codex.user_home)
+        if not isinstance(visibility, CodexHomeVisibility):
+            raise ProviderError("Codex runtime received incompatible home visibility.")
         argv = _codex_spec(
             executable,
             runtime,
@@ -119,15 +116,13 @@ def build_launch_spec(
             state_home,
             model=model,
             effort=effort,
-            user_home=settings.codex.user_home,
             session_model_provider=settings.codex.session_model_provider,
-            project_directory=working_directory,
             approval_policy=runtime.approval_policy,
             sandbox_mode=runtime.sandbox_mode,
             session_id=session_id,
+            visibility=visibility,
         )
     elif isinstance(runtime, GrokRuntime):
-        sync_grok_user_mcp_servers(state_home, settings.grok.user_home)
         argv = _grok_spec(
             executable,
             runtime,
@@ -208,12 +203,11 @@ def _codex_spec(
     state_home: Path,
     model: str | None,
     effort: str | None,
-    user_home: Path | None = None,
     session_model_provider: str | None = None,
-    project_directory: Path | None = None,
     approval_policy: str | None = None,
     sandbox_mode: str | None = None,
     session_id: str | None = None,
+    visibility: CodexHomeVisibility | None = None,
 ) -> list[str]:
     _clear(env, "CODEX_HOME", "CODEX_SQLITE_HOME")
     env["CODEX_HOME"] = str(state_home)
@@ -227,11 +221,10 @@ def _codex_spec(
             state_home,
             model,
             effort,
-            user_home=user_home,
             session_model_provider=session_model_provider,
-            project_directory=project_directory,
             approval_policy=approval_policy,
             sandbox_mode=sandbox_mode,
+            visibility=visibility,
         )
         env[profile.env_key] = _required(runtime_provider.api_key, "Codex API key")
         argv.extend(["--profile", profile.name])
@@ -239,8 +232,6 @@ def _codex_spec(
         # argv so Codex does not keep sticky collaboration-mode defaults.
         _append_codex_model_and_effort(argv, model=model, effort=effort)
         return argv
-    if user_home is not None:
-        sync_codex_user_config(state_home, user_home, project_directory)
     if not session_id:
         _append_codex_model_and_effort(argv, model=model, effort=effort)
     argv.extend(["--ask-for-approval", _required(runtime.approval_policy, "Codex approval_policy")])

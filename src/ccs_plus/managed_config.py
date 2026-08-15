@@ -9,23 +9,15 @@ from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import cast
 
 import portalocker
 import tomlkit
 from tomlkit import TOMLDocument
 
 from ccs_plus.domain import CodexRuntime, GrokRuntime, ProviderError, RuntimeProvider
+from ccs_plus.home_visibility import HomeVisibility
 
 logger = logging.getLogger(__name__)
-
-CODEX_USER_CONFIG_TABLES = (
-    "mcp_servers",
-    "plugins",
-    "marketplaces",
-    "shell_environment_policy",
-)
-
 
 @dataclass(frozen=True)
 class ManagedProfile:
@@ -39,11 +31,10 @@ def ensure_managed_config(
     model: str | None,
     effort: str | None,
     *,
-    user_home: Path | None = None,
     session_model_provider: str | None = None,
-    project_directory: Path | None = None,
     approval_policy: str | None = None,
     sandbox_mode: str | None = None,
+    visibility: HomeVisibility | None = None,
 ) -> ManagedProfile:
     if isinstance(runtime, CodexRuntime):
         return _ensure_codex_profile(
@@ -51,14 +42,13 @@ def ensure_managed_config(
             state_home,
             model,
             effort,
-            user_home=user_home,
-            project_directory=project_directory,
             session_model_provider=_required(
                 session_model_provider,
                 "Codex session_model_provider",
             ),
             approval_policy=approval_policy,
             sandbox_mode=sandbox_mode,
+            visibility=visibility,
         )
     if isinstance(runtime, GrokRuntime):
         return _ensure_grok_model(runtime, state_home, model, effort)
@@ -70,11 +60,10 @@ def _ensure_codex_profile(
     model: str | None,
     effort: str | None,
     *,
-    user_home: Path | None = None,
-    project_directory: Path | None = None,
     session_model_provider: str,
     approval_policy: str | None = None,
     sandbox_mode: str | None = None,
+    visibility: HomeVisibility | None = None,
 ) -> ManagedProfile:
     profile = _managed_name(runtime, "codex")
     env_key = _managed_env_key(runtime, "CODEX")
@@ -126,194 +115,11 @@ def _ensure_codex_profile(
         providers[session_model_provider] = provider
         document["model_providers"] = providers
 
-        _merge_codex_user_tables(document, state_home, user_home, project_directory)
+        if visibility is not None:
+            visibility.merge_into(document)
 
         _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
     return ManagedProfile(name=profile, env_key=env_key)
-
-
-def _merge_codex_user_tables(
-    document: TOMLDocument,
-    state_home: Path,
-    user_home: Path | None,
-    project_directory: Path | None = None,
-) -> None:
-    state_document = _load_codex_state_config(state_home)
-    user_document = _load_codex_user_config(user_home) if user_home is not None else None
-    _merge_codex_mcp_servers(document, state_document, user_document)
-    if user_document is None:
-        return
-    for key in CODEX_USER_CONFIG_TABLES:
-        if key == "mcp_servers":
-            continue
-        if key not in user_document:
-            continue
-        document[key] = deepcopy(user_document[key])
-    _merge_current_project_trust(document, user_document, project_directory)
-
-
-def _merge_codex_mcp_servers(
-    document: TOMLDocument,
-    state_document: TOMLDocument | None,
-    user_document: TOMLDocument | None,
-) -> None:
-    merged = tomlkit.table()
-    has_servers = False
-    for source in (state_document, user_document):
-        if source is None:
-            continue
-        servers = source.get("mcp_servers")
-        if not isinstance(servers, Mapping):
-            continue
-        for name, value in servers.items():
-            merged[name] = deepcopy(value)
-            has_servers = True
-    if has_servers:
-        document["mcp_servers"] = merged
-
-
-def sync_codex_user_config(
-    state_home: Path,
-    user_home: Path,
-    project_directory: Path | None = None,
-) -> None:
-    """Copy user-owned Codex visibility tables into the isolated base config.
-
-    Custom providers receive these tables in their managed profile. Official
-    providers do not have such a profile, so their base config needs the same
-    visibility layer. Provider, authentication, and unrelated user settings
-    remain isolated in ``state_home``.
-    """
-    user_document = _load_codex_user_config(user_home)
-    if user_document is None:
-        return
-
-    path = state_home / "config.toml"
-    with _locked(path):
-        content = path.read_text(encoding="utf-8") if path.exists() else ""
-        try:
-            document = tomlkit.parse(content) if content else tomlkit.document()
-        except Exception as exc:
-            logger.warning("Skipping Codex user config merge into %s: %s", path, exc)
-            return
-
-        for key in CODEX_USER_CONFIG_TABLES:
-            if key in user_document:
-                document[key] = deepcopy(user_document[key])
-        _merge_current_project_trust(document, user_document, project_directory)
-        _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
-
-
-def _load_codex_user_config(user_home: Path) -> TOMLDocument | None:
-    return _load_codex_config(user_home, "user")
-
-
-def _load_codex_state_config(state_home: Path) -> TOMLDocument | None:
-    return _load_codex_config(state_home, "state")
-
-
-def _load_codex_config(home: Path, source: str) -> TOMLDocument | None:
-    config_path = home / "config.toml"
-    if not config_path.is_file():
-        return None
-    try:
-        return tomlkit.parse(config_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.warning(
-            "Skipping Codex %s config merge from %s: %s",
-            source,
-            config_path,
-            exc,
-        )
-        return None
-
-
-def sync_grok_user_mcp_servers(state_home: Path, user_home: Path | None) -> None:
-    """Copy user-scope Grok MCP servers into the stable runtime home.
-
-    The state-home entries are retained so MCP servers added while Grok runs
-    under ``GROK_HOME`` survive later provider launches. User-home entries win
-    on name conflicts, matching the Codex and Claude precedence rules.
-    """
-    if user_home is None or _same_path(state_home, user_home):
-        return
-    source_path = user_home / "config.toml"
-    if not source_path.is_file():
-        return
-    try:
-        source_document = tomlkit.parse(source_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.warning("Skipping Grok MCP merge from %s: %s", source_path, exc)
-        return
-    user_servers = source_document.get("mcp_servers")
-    if not isinstance(user_servers, Mapping):
-        return
-
-    path = state_home / "config.toml"
-    with _locked(path):
-        content = path.read_text(encoding="utf-8") if path.exists() else ""
-        try:
-            document = tomlkit.parse(content) if content else tomlkit.document()
-        except Exception as exc:
-            logger.warning("Skipping Grok MCP merge into %s: %s", path, exc)
-            return
-        current_servers = document.get("mcp_servers")
-        if current_servers is not None and not isinstance(current_servers, Mapping):
-            logger.warning("Skipping Grok MCP merge; invalid mcp_servers in %s", path)
-            return
-
-        merged = tomlkit.table()
-        if isinstance(current_servers, Mapping):
-            for name, value in current_servers.items():
-                merged[name] = deepcopy(value)
-        for name, value in user_servers.items():
-            merged[name] = deepcopy(value)
-        document["mcp_servers"] = merged
-        _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
-
-
-def _same_path(first: Path, second: Path) -> bool:
-    return os.path.normcase(os.path.abspath(first)) == os.path.normcase(os.path.abspath(second))
-
-
-def _merge_current_project_trust(
-    document: TOMLDocument,
-    user_document: TOMLDocument,
-    project_directory: Path | None,
-) -> None:
-    if project_directory is None:
-        return
-    user_projects = user_document.get("projects")
-    if not isinstance(user_projects, Mapping):
-        return
-
-    matching_key = _project_config_key(user_projects, project_directory)
-    if matching_key is None:
-        return
-
-    projects = document.get("projects")
-    if not isinstance(projects, Mapping):
-        projects = tomlkit.table()
-        document["projects"] = projects
-    projects = cast(MutableMapping[str, object], projects)
-    projects[matching_key] = deepcopy(user_projects[matching_key])
-
-
-def _project_config_key(projects: Mapping[object, object], directory: Path) -> str | None:
-    """Find the trusted project root containing the requested working directory."""
-    current = os.path.normcase(os.path.abspath(os.path.normpath(str(directory))))
-    matches: list[str] = []
-    for key in projects:
-        if not isinstance(key, str):
-            continue
-        candidate = os.path.normcase(os.path.abspath(os.path.normpath(key)))
-        try:
-            if os.path.commonpath((candidate, current)) == candidate:
-                matches.append(key)
-        except ValueError:
-            # Windows paths on different drives cannot share a project root.
-            continue
-    return max(matches, key=len, default=None)
 
 
 def _permission_profile(sandbox_mode: str) -> str:

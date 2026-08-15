@@ -690,7 +690,7 @@ def test_claude_launch_links_and_syncs_mcp(tmp_path, monkeypatch) -> None:
     assert document["mcpServers"]["demo"]["command"] == "demo"
 
 
-def test_grok_launch_does_not_link_user_skills(tmp_path, monkeypatch) -> None:
+def test_grok_launch_links_user_skills(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-grok")
     user_like = tmp_path / "user-grok" / "skills" / "x"
     user_like.mkdir(parents=True)
@@ -698,7 +698,7 @@ def test_grok_launch_does_not_link_user_skills(tmp_path, monkeypatch) -> None:
 
     build_launch_spec(_provider(AppKind.GROK), settings, tmp_path)
 
-    assert not (settings.grok.home / "skills").exists()
+    assert (settings.grok.home / "skills" / "x").exists()
 
 
 def test_grok_launch_merges_user_mcp_servers(tmp_path, monkeypatch) -> None:

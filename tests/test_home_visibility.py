@@ -6,15 +6,59 @@ import os
 from pathlib import Path
 
 import pytest
+import tomlkit
 
+from ccs_plus.domain import AppKind, ClaudeRuntime, CodexRuntime, GrokRuntime, Provider
 from ccs_plus.home_visibility import (
+    ClaudeHomeVisibility,
+    CodexHomeVisibility,
+    GrokHomeVisibility,
     _is_link,
     _links_to,
-    apply_claude_visibility,
-    link_codex_sessions,
+    home_visibility_for,
     link_user_entries,
-    sync_claude_mcp_servers,
 )
+
+
+def _runtime(runtime_type, app: AppKind):
+    provider = Provider(
+        id=f"{app.value}-official",
+        app=app,
+        name=app.value,
+        settings_config={},
+        endpoints=(),
+        category="official",
+        created_at=None,
+        notes=None,
+        is_current=False,
+    )
+    return runtime_type(
+        provider=provider,
+        endpoint=None,
+        api_key=None,
+        model=None,
+        effort=None,
+    )
+
+
+def test_home_visibility_factory_selects_runtime_implementation(
+    tmp_path: Path,
+    app_settings,
+) -> None:
+    settings = app_settings(tmp_path)
+
+    assert isinstance(
+        home_visibility_for(_runtime(ClaudeRuntime, AppKind.CLAUDE), settings, tmp_path),
+        ClaudeHomeVisibility,
+    )
+    assert isinstance(
+        home_visibility_for(_runtime(CodexRuntime, AppKind.CODEX), settings, tmp_path),
+        CodexHomeVisibility,
+    )
+    assert isinstance(
+        home_visibility_for(_runtime(GrokRuntime, AppKind.GROK), settings, tmp_path),
+        GrokHomeVisibility,
+    )
 
 
 def test_link_user_entries_links_each_child_not_the_parent(tmp_path: Path) -> None:
@@ -93,7 +137,7 @@ def test_link_user_entries_missing_source_is_noop(tmp_path: Path) -> None:
     assert not target.exists()
 
 
-def test_apply_claude_visibility_uses_plugin_name_sets(tmp_path: Path) -> None:
+def test_claude_home_visibility_uses_plugin_name_sets(tmp_path: Path) -> None:
     user_home = tmp_path / "user-claude"
     state_home = tmp_path / "state-claude"
     plugins = user_home / "plugins"
@@ -102,12 +146,12 @@ def test_apply_claude_visibility_uses_plugin_name_sets(tmp_path: Path) -> None:
     (plugins / "installed_plugins.json").write_text('{"p": 1}\n', encoding="utf-8")
     (plugins / "plugin-catalog-cache.json").write_text("cache\n", encoding="utf-8")
 
-    apply_claude_visibility(
-        state_home,
-        user_home,
+    ClaudeHomeVisibility(
+        state_home=state_home,
+        user_home=user_home,
         plugin_copy_names={"installed_plugins.json"},
         plugin_skip_names={"plugin-catalog-cache.json"},
-    )
+    ).apply()
 
     copied = state_home / "plugins" / "installed_plugins.json"
     assert copied.read_text(encoding="utf-8") == '{"p": 1}\n'
@@ -115,6 +159,58 @@ def test_apply_claude_visibility_uses_plugin_name_sets(tmp_path: Path) -> None:
     assert _is_link(state_home / "plugins" / "marketplaces")
     assert _links_to(state_home / "plugins" / "marketplaces", plugins / "marketplaces")
     assert not (state_home / "plugins" / "plugin-catalog-cache.json").exists()
+
+
+def test_codex_home_visibility_skips_plugin_runtime_directories(tmp_path: Path) -> None:
+    user_home = tmp_path / "user-codex"
+    state_home = tmp_path / "state-codex"
+    (user_home / "plugins" / "cache").mkdir(parents=True)
+    (user_home / "plugins" / ".plugin-appserver").mkdir()
+    (user_home / "plugins" / ".remote-plugin-install-staging").mkdir()
+
+    CodexHomeVisibility(state_home, user_home).apply()
+
+    assert _is_link(state_home / "plugins" / "cache")
+    assert not (state_home / "plugins" / ".plugin-appserver").exists()
+    assert not (state_home / "plugins" / ".remote-plugin-install-staging").exists()
+
+
+def test_grok_home_visibility_exposes_extensions_and_config(tmp_path: Path) -> None:
+    user_home = tmp_path / "user-grok"
+    state_home = tmp_path / "state-grok"
+    (user_home / "skills" / "skill-a").mkdir(parents=True)
+    (user_home / "plugins" / "plugin-a").mkdir(parents=True)
+    (user_home / "hooks" / "hook-a").mkdir(parents=True)
+    installed = user_home / "installed-plugins"
+    (installed / "plugin-a").mkdir(parents=True)
+    (installed / "registry.json").write_text('{"plugin-a": {}}\n', encoding="utf-8")
+    (user_home / "config.toml").write_text(
+        """
+[mcp_servers.user]
+command = "user"
+
+[plugins]
+enabled = ["plugin-a"]
+
+[marketplace]
+official_marketplace_auto_installed = true
+""",
+        encoding="utf-8",
+    )
+
+    GrokHomeVisibility(state_home, user_home).apply()
+
+    assert _is_link(state_home / "skills" / "skill-a")
+    assert _is_link(state_home / "plugins" / "plugin-a")
+    assert _is_link(state_home / "hooks" / "hook-a")
+    assert _is_link(state_home / "installed-plugins" / "plugin-a")
+    registry = state_home / "installed-plugins" / "registry.json"
+    assert registry.read_text(encoding="utf-8") == '{"plugin-a": {}}\n'
+    assert not _is_link(registry)
+    document = tomlkit.parse((state_home / "config.toml").read_text(encoding="utf-8"))
+    assert document["mcp_servers"]["user"]["command"] == "user"
+    assert document["plugins"]["enabled"] == ["plugin-a"]
+    assert document["marketplace"]["official_marketplace_auto_installed"] is True
 
 
 def test_link_user_entries_copies_named_files(tmp_path: Path) -> None:
@@ -183,11 +279,11 @@ def test_link_user_entries_copy_keeps_existing_link(tmp_path: Path) -> None:
     assert _links_to(existing, payload)
 
 
-def test_link_codex_sessions_links_only_the_session_directory(tmp_path: Path) -> None:
+def test_codex_home_visibility_links_only_the_session_directory(tmp_path: Path) -> None:
     user_home = tmp_path / "user-codex"
     state_home = tmp_path / "state-codex"
 
-    link_codex_sessions(state_home, user_home)
+    CodexHomeVisibility(state_home, user_home).expose_sessions()
 
     source = user_home / "sessions"
     target = state_home / "sessions"
@@ -200,7 +296,7 @@ def test_link_codex_sessions_links_only_the_session_directory(tmp_path: Path) ->
     assert (source / "created-by-runtime.jsonl").read_text(encoding="utf-8") == "session"
 
 
-def test_link_codex_sessions_preserves_existing_directory(tmp_path: Path) -> None:
+def test_codex_home_visibility_preserves_existing_session_directory(tmp_path: Path) -> None:
     user_home = tmp_path / "user-codex"
     state_home = tmp_path / "state-codex"
     existing = state_home / "sessions"
@@ -208,14 +304,14 @@ def test_link_codex_sessions_preserves_existing_directory(tmp_path: Path) -> Non
     marker = existing / "keep.jsonl"
     marker.write_text("state", encoding="utf-8")
 
-    link_codex_sessions(state_home, user_home)
+    CodexHomeVisibility(state_home, user_home).expose_sessions()
 
     assert marker.read_text(encoding="utf-8") == "state"
     assert not _is_link(existing)
 
 
-def test_sync_claude_mcp_servers_merges_user_over_existing(tmp_path: Path) -> None:
-    source = tmp_path / "user.claude.json"
+def test_claude_home_visibility_merges_user_mcp_over_existing(tmp_path: Path) -> None:
+    source = tmp_path / ".claude.json"
     source.write_text(
         json.dumps(
             {
@@ -243,7 +339,7 @@ def test_sync_claude_mcp_servers_merges_user_over_existing(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    sync_claude_mcp_servers(state, source_path=source)
+    ClaudeHomeVisibility(state, tmp_path / ".claude").apply()
 
     document = json.loads(target.read_text(encoding="utf-8"))
     assert document["theme"] == "dark"
@@ -255,8 +351,8 @@ def test_sync_claude_mcp_servers_merges_user_over_existing(tmp_path: Path) -> No
     assert "user-only" in json.loads(source.read_text(encoding="utf-8"))["mcpServers"]
 
 
-def test_sync_claude_mcp_servers_ignores_invalid_json(tmp_path: Path, caplog) -> None:
-    source = tmp_path / "user.claude.json"
+def test_claude_home_visibility_ignores_invalid_json(tmp_path: Path, caplog) -> None:
+    source = tmp_path / ".claude.json"
     source.write_text("{not-json", encoding="utf-8")
     state = tmp_path / "claude"
     state.mkdir()
@@ -264,14 +360,14 @@ def test_sync_claude_mcp_servers_ignores_invalid_json(tmp_path: Path, caplog) ->
     target.write_text('{"mcpServers": {"keep": {}}}\n', encoding="utf-8")
 
     with caplog.at_level(logging.WARNING, logger="ccs_plus.home_visibility"):
-        sync_claude_mcp_servers(state, source_path=source)
+        ClaudeHomeVisibility(state, tmp_path / ".claude").apply()
 
-    assert "Skipping Claude MCP merge" in caplog.text
+    assert "Skipping Claude MCP source" in caplog.text
     assert json.loads(target.read_text(encoding="utf-8")) == {"mcpServers": {"keep": {}}}
 
 
-def test_sync_claude_mcp_servers_ignores_invalid_target(tmp_path: Path, caplog) -> None:
-    source = tmp_path / "user.claude.json"
+def test_claude_home_visibility_ignores_invalid_target(tmp_path: Path, caplog) -> None:
+    source = tmp_path / ".claude.json"
     source.write_text(json.dumps({"mcpServers": {"a": {}}}), encoding="utf-8")
     state = tmp_path / "claude"
     state.mkdir()
@@ -279,7 +375,7 @@ def test_sync_claude_mcp_servers_ignores_invalid_target(tmp_path: Path, caplog) 
     target.write_text("{broken", encoding="utf-8")
 
     with caplog.at_level(logging.WARNING, logger="ccs_plus.home_visibility"):
-        sync_claude_mcp_servers(state, source_path=source)
+        ClaudeHomeVisibility(state, tmp_path / ".claude").apply()
 
-    assert "invalid target" in caplog.text
+    assert "Skipping Claude MCP target" in caplog.text
     assert target.read_text(encoding="utf-8") == "{broken"

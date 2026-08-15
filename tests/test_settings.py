@@ -22,7 +22,7 @@ def test_settings_default_homes_use_local_data(settings_root) -> None:
     # user_home is not in settings.yaml; defaults to Path.home() / ".claude"|".codex"
     assert settings.claude.user_home == Path.home() / ".claude"
     assert settings.codex.user_home == Path.home() / ".codex"
-    assert settings.grok.user_home is None
+    assert settings.grok.user_home == Path.home() / ".grok"
     # plugin name sets are not in settings.yaml; empty means no copies/skips
     assert settings.claude.plugin_copy_names == frozenset()
     assert settings.claude.plugin_skip_names == frozenset()
@@ -45,6 +45,7 @@ def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> No
     monkeypatch.setenv("CCS_PLUS_APPS__CLAUDE__PERMISSION_MODE", "manual")
     monkeypatch.setenv("CCS_PLUS_APPS__GROK__SANDBOX_MODE", "restricted")
     monkeypatch.setenv("CCS_PLUS_APPS__GROK__ALWAYS_APPROVE", "false")
+    monkeypatch.setenv("CCS_PLUS_APPS__GROK__USER_HOME", "custom/user-grok")
     monkeypatch.setenv("CCS_PLUS_APPS__CLAUDE__USER_HOME", "custom/user-claude")
     monkeypatch.setenv("CCS_PLUS_ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
     settings = load_settings(settings_root)
@@ -55,6 +56,7 @@ def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> No
     assert settings.claude.permission_mode == "manual"
     assert settings.grok.sandbox_mode == "restricted"
     assert settings.grok.always_approve is False
+    assert settings.grok.user_home == settings_root / "custom" / "user-grok"
     assert settings.claude.user_home == settings_root / "custom" / "user-claude"
     assert settings.encryption_key == "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
@@ -90,6 +92,7 @@ def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None
                 "    sandbox_mode: danger-full-access",
                 "  grok:",
                 "    home: data/grok",
+                "    user_home: custom/grok-user",
                 "    sandbox_mode: workspace",
                 "    always_approve: true",
                 "",
@@ -101,14 +104,17 @@ def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None
     assert settings.proxy == ""
     assert settings.claude.user_home == settings_root / "custom" / "claude-user"
     assert settings.codex.user_home == settings_root / "custom" / "codex-user"
+    assert settings.grok.user_home == settings_root / "custom" / "grok-user"
 
 
 def test_blank_user_home_keeps_builtin_default(settings_root, monkeypatch) -> None:
     monkeypatch.setenv("CCS_PLUS_APPS__CLAUDE__USER_HOME", "   ")
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__USER_HOME", "")
+    monkeypatch.setenv("CCS_PLUS_APPS__GROK__USER_HOME", "  ")
     settings = load_settings(settings_root)
     assert settings.claude.user_home == Path.home() / ".claude"
     assert settings.codex.user_home == Path.home() / ".codex"
+    assert settings.grok.user_home == Path.home() / ".grok"
 
 
 def _add_claude_plugins_to_yaml(settings_root: Path, plugins_block: str) -> None:

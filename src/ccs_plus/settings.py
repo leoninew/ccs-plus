@@ -217,6 +217,12 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
         ),
         grok=GrokSettings(
             home=_resolve_path(root, _get(config, "apps.grok.home"), "apps.grok.home"),
+            user_home=_resolve_optional_user_home(
+                root,
+                _get(config, "apps.grok.user_home"),
+                "apps.grok.user_home",
+                ".grok",
+            ),
             sandbox_mode=_resolve_non_empty_string(
                 _get(config, "apps.grok.sandbox_mode"),
                 "apps.grok.sandbox_mode",

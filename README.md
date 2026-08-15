@@ -110,7 +110,7 @@ uv run ccs-plus launch grok --provider "<provider-name>" --model "<model-id>" --
 | Codex | `apps.codex.home` | provider 独立 managed profile；统一会话 provider 标识 |
 | Grok | `apps.grok.home` | provider 独立 managed model profile |
 
-Claude 和 Codex 启动时会按需让隔离 Home 看见用户的 skills、plugins、MCP 配置；Grok 仅同步用户 MCP 配置，不同步 skills 或 plugins。不会把整个用户 Home 直接替换为隔离 Home。
+Claude、Codex 和 Grok 启动时会按各自目录结构，让隔离 Home 看见用户的 skills、plugins 与 MCP/扩展配置。运行缓存、临时目录和应用状态仍保留在隔离 Home，不会把整个用户 Home 直接替换为隔离 Home。
 
 对于自定义 provider，启动配置分为两层：连接、模型和推理配置来自数据库中所选 provider 的实际记录；权限字段也优先使用该记录，缺失时才回退到 `settings.yaml` 中对应应用的配置。Codex 的 `apps.codex.*` 还会在新增或导入时写入初始值。官方 provider 不解析自定义 provider 配置。
 
