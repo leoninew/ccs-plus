@@ -26,6 +26,8 @@ class ClaudeSettings:
     home: Path
     permission_mode: str
     user_home: Path | None = None
+    plugin_copy_names: frozenset[str] = frozenset()
+    plugin_skip_names: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -114,6 +116,20 @@ def _resolve_non_empty_string(value: object, key: str) -> str:
     return value.strip()
 
 
+def _resolve_name_set(value: object, key: str) -> frozenset[str]:
+    """Parse a list of names into a set; absent or empty yields ``frozenset()``."""
+    if value is None:
+        return frozenset()
+    if not isinstance(value, (list, tuple, set, frozenset)):
+        raise ProviderError(f"Configuration {key} must be a list of names.")
+    names: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ProviderError(f"Configuration {key} entries must be non-empty strings.")
+        names.add(item.strip())
+    return frozenset(names)
+
+
 def _resolve_proxy(value: object) -> str:
     if value is None:
         return ""
@@ -168,6 +184,14 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
             permission_mode=_resolve_non_empty_string(
                 _get(config, "apps.claude.permission_mode"),
                 "apps.claude.permission_mode",
+            ),
+            plugin_copy_names=_resolve_name_set(
+                _get(config, "apps.claude.plugins.copy"),
+                "apps.claude.plugins.copy",
+            ),
+            plugin_skip_names=_resolve_name_set(
+                _get(config, "apps.claude.plugins.skip"),
+                "apps.claude.plugins.skip",
             ),
         ),
         codex=CodexSettings(

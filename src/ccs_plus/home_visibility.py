@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import tempfile
 from collections.abc import Collection
 from pathlib import Path
@@ -22,8 +23,15 @@ def link_user_entries(
     target_dir: Path,
     *,
     skip_names: Collection[str] = (),
+    copy_names: Collection[str] = (),
 ) -> None:
     """Link each entry under *source_dir* into *target_dir* individually.
+
+    Directories are junctioned/symlinked so both sides share one tree. File
+    names listed in *copy_names* are copied from source on every call, replacing
+    any stale target copy — index/state files whose contents point back at the
+    real home need no link. Other files are hardlinked then symlinked. Names in
+    *skip_names* are never touched on the target side.
 
     Never links *source_dir* itself as a single unit. Existing real entries in
     *target_dir* are left untouched. Dangling links are removed. Failures log a
@@ -35,12 +43,16 @@ def link_user_entries(
         target_dir.mkdir(parents=True, exist_ok=True)
         _cleanup_dangling_links(target_dir)
         skip = set(skip_names)
+        copy = set(copy_names)
         for source_entry in sorted(source_dir.iterdir(), key=lambda path: path.name.lower()):
             name = source_entry.name
             if name in skip:
                 continue
             target_entry = target_dir / name
-            _link_one(source_entry, target_entry)
+            if name in copy and source_entry.is_file():
+                _copy_file(source_entry, target_entry)
+            else:
+                _link_one(source_entry, target_entry)
     except OSError as exc:
         logger.warning("Failed to prepare links from %s into %s: %s", source_dir, target_dir, exc)
 
@@ -77,9 +89,20 @@ def link_codex_sessions(state_home: Path, user_home: Path) -> None:
         logger.warning("Failed to link Codex sessions %s -> %s: %s", target, source, exc)
 
 
-def apply_claude_visibility(state_home: Path, user_home: Path) -> None:
+def apply_claude_visibility(
+    state_home: Path,
+    user_home: Path,
+    *,
+    plugin_copy_names: Collection[str],
+    plugin_skip_names: Collection[str],
+) -> None:
     link_user_entries(user_home / "skills", state_home / "skills")
-    link_user_entries(user_home / "plugins", state_home / "plugins")
+    link_user_entries(
+        user_home / "plugins",
+        state_home / "plugins",
+        skip_names=plugin_skip_names,
+        copy_names=plugin_copy_names,
+    )
     sync_claude_mcp_servers(state_home, source_path=user_home.parent / ".claude.json")
 
 
@@ -216,6 +239,19 @@ def _link_file(source: Path, target: Path) -> None:
         target.symlink_to(source)
     except OSError as exc:
         logger.warning("Failed to link file %s -> %s: %s", target, source, exc)
+
+
+def _copy_file(source: Path, target: Path) -> None:
+    """Copy *source* into *target*, replacing any stale isolated copy.
+
+    An existing link that already points back at *source* is kept as-is.
+    """
+    if _is_link(target) and _links_to(target, source):
+        return
+    try:
+        shutil.copy2(source, target)
+    except OSError as exc:
+        logger.warning("Failed to copy %s -> %s: %s", target, source, exc)
 
 
 def _path_lexists(path: Path) -> bool:

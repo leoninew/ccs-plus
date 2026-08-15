@@ -23,6 +23,9 @@ def test_settings_default_homes_use_local_data(settings_root) -> None:
     assert settings.claude.user_home == Path.home() / ".claude"
     assert settings.codex.user_home == Path.home() / ".codex"
     assert settings.grok.user_home is None
+    # plugin name sets are not in settings.yaml; empty means no copies/skips
+    assert settings.claude.plugin_copy_names == frozenset()
+    assert settings.claude.plugin_skip_names == frozenset()
 
 
 def test_settings_loads_codex_provider_defaults(settings_root) -> None:
@@ -106,6 +109,60 @@ def test_blank_user_home_keeps_builtin_default(settings_root, monkeypatch) -> No
     settings = load_settings(settings_root)
     assert settings.claude.user_home == Path.home() / ".claude"
     assert settings.codex.user_home == Path.home() / ".codex"
+
+
+def _add_claude_plugins_to_yaml(settings_root: Path, plugins_block: str) -> None:
+    path = settings_root / "settings.yaml"
+    yaml = path.read_text(encoding="utf-8")
+    path.write_text(
+        yaml.replace(
+            "    permission_mode: bypassPermissions\n",
+            f"    permission_mode: bypassPermissions\n{plugins_block}",
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_settings_claude_plugin_name_sets_from_yaml(settings_root) -> None:
+    _add_claude_plugins_to_yaml(
+        settings_root,
+        "    plugins:\n"
+        "      copy:\n"
+        "        - a.json\n"
+        "        - b.json\n"
+        "      skip:\n"
+        "        - c.json\n",
+    )
+
+    settings = load_settings(settings_root)
+
+    assert settings.claude.plugin_copy_names == frozenset({"a.json", "b.json"})
+    assert settings.claude.plugin_skip_names == frozenset({"c.json"})
+
+
+def test_settings_claude_empty_plugin_names_are_honored(settings_root) -> None:
+    _add_claude_plugins_to_yaml(
+        settings_root,
+        "    plugins:\n"
+        "      copy: []\n"
+        "      skip: []\n",
+    )
+
+    settings = load_settings(settings_root)
+
+    assert settings.claude.plugin_copy_names == frozenset()
+    assert settings.claude.plugin_skip_names == frozenset()
+
+
+def test_settings_rejects_non_list_plugin_names(settings_root) -> None:
+    _add_claude_plugins_to_yaml(
+        settings_root,
+        "    plugins:\n"
+        "      copy: not-a-list\n",
+    )
+
+    with pytest.raises(ProviderError, match=r"apps\.claude\.plugins\.copy"):
+        load_settings(settings_root)
 
 
 def test_secrets_file_is_not_loaded(settings_root) -> None:

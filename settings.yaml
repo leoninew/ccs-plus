@@ -22,6 +22,19 @@ apps:
   claude:
     home: data/claude
     permission_mode: bypassPermissions
+    # Plugin entries shared into the isolated state home. Directories are always
+    # linked (junctions); these names control files only. "copy" files are copied
+    # from the real home on each launch (their contents point back there by
+    # absolute path, so a copy needs no symlink privilege); "skip" files are left
+    # to the isolated run (regenerable cache).
+    plugins:
+      copy:
+        - .last_inuse_sweep
+        - blocklist.json
+        - installed_plugins.json
+        - known_marketplaces.json
+      skip:
+        - plugin-catalog-cache.json
   codex:
     home: data/codex
     session_model_provider: ccs-plus-managed

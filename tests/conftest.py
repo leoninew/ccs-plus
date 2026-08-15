@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -12,6 +13,18 @@ from ccs_plus.settings import (
     CodexSettings,
     GrokSettings,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clean_ccs_plus_environment(monkeypatch) -> None:
+    """Keep ambient CCS_PLUS_* variables out of settings tests.
+
+    The developer shell may export e.g. CCS_PLUS_PROXY; Dynaconf's envvar_prefix
+    would otherwise let it override settings.yaml values inside load_settings.
+    Tests that want a value set it again via monkeypatch.setenv.
+    """
+    for key in [key for key in os.environ if key.startswith("CCS_PLUS_")]:
+        monkeypatch.delenv(key, raising=False)
 
 
 @pytest.fixture()

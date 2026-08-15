@@ -94,7 +94,12 @@ def build_launch_spec(
 
     if isinstance(runtime, ClaudeRuntime):
         if settings.claude.user_home is not None:
-            apply_claude_visibility(state_home, settings.claude.user_home)
+            apply_claude_visibility(
+                state_home,
+                settings.claude.user_home,
+                plugin_copy_names=settings.claude.plugin_copy_names,
+                plugin_skip_names=settings.claude.plugin_skip_names,
+            )
         argv = _claude_spec(
             executable,
             runtime,

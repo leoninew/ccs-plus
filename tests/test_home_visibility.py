@@ -5,9 +5,12 @@ import logging
 import os
 from pathlib import Path
 
+import pytest
+
 from ccs_plus.home_visibility import (
     _is_link,
     _links_to,
+    apply_claude_visibility,
     link_codex_sessions,
     link_user_entries,
     sync_claude_mcp_servers,
@@ -88,6 +91,96 @@ def test_link_user_entries_missing_source_is_noop(tmp_path: Path) -> None:
     target = tmp_path / "state" / "skills"
     link_user_entries(tmp_path / "missing", target)
     assert not target.exists()
+
+
+def test_apply_claude_visibility_uses_plugin_name_sets(tmp_path: Path) -> None:
+    user_home = tmp_path / "user-claude"
+    state_home = tmp_path / "state-claude"
+    plugins = user_home / "plugins"
+    plugins.mkdir(parents=True)
+    (plugins / "marketplaces").mkdir()
+    (plugins / "installed_plugins.json").write_text('{"p": 1}\n', encoding="utf-8")
+    (plugins / "plugin-catalog-cache.json").write_text("cache\n", encoding="utf-8")
+
+    apply_claude_visibility(
+        state_home,
+        user_home,
+        plugin_copy_names={"installed_plugins.json"},
+        plugin_skip_names={"plugin-catalog-cache.json"},
+    )
+
+    copied = state_home / "plugins" / "installed_plugins.json"
+    assert copied.read_text(encoding="utf-8") == '{"p": 1}\n'
+    assert not _is_link(copied)
+    assert _is_link(state_home / "plugins" / "marketplaces")
+    assert _links_to(state_home / "plugins" / "marketplaces", plugins / "marketplaces")
+    assert not (state_home / "plugins" / "plugin-catalog-cache.json").exists()
+
+
+def test_link_user_entries_copies_named_files(tmp_path: Path) -> None:
+    source = tmp_path / "user" / "plugins"
+    target = tmp_path / "state" / "plugins"
+    (source / "cache").mkdir(parents=True)
+    (source / "cache" / "plugin-code").write_text("code", encoding="utf-8")
+    payload = source / "installed_plugins.json"
+    payload.write_text('{"plugins": {}}\n', encoding="utf-8")
+
+    link_user_entries(source, target, copy_names={"installed_plugins.json"})
+
+    copied = target / "installed_plugins.json"
+    assert copied.read_text(encoding="utf-8") == '{"plugins": {}}\n'
+    assert not _is_link(copied)
+    # directories still share through a link, not a copy
+    assert _is_link(target / "cache")
+    assert _links_to(target / "cache", source / "cache")
+
+
+def test_link_user_entries_copy_overrides_stale_target(tmp_path: Path) -> None:
+    source = tmp_path / "user" / "plugins"
+    target = tmp_path / "state" / "plugins"
+    source.mkdir(parents=True)
+    target.mkdir(parents=True)
+    payload = source / "known_marketplaces.json"
+    payload.write_text('{"real": true}\n', encoding="utf-8")
+    stale = target / "known_marketplaces.json"
+    stale.write_text('{"stale": true}\n', encoding="utf-8")
+
+    link_user_entries(source, target, copy_names={"known_marketplaces.json"})
+
+    assert stale.read_text(encoding="utf-8") == '{"real": true}\n'
+    assert not _is_link(stale)
+
+
+def test_link_user_entries_skips_named_entries(tmp_path: Path) -> None:
+    source = tmp_path / "user" / "plugins"
+    target = tmp_path / "state" / "plugins"
+    source.mkdir(parents=True)
+    (source / "plugin-catalog-cache.json").write_text("cache", encoding="utf-8")
+    target.mkdir(parents=True)
+    own = target / "plugin-catalog-cache.json"
+    own.write_text("isolated-own-cache", encoding="utf-8")
+
+    link_user_entries(source, target, skip_names={"plugin-catalog-cache.json"})
+
+    assert own.read_text(encoding="utf-8") == "isolated-own-cache"
+    assert not _is_link(own)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="file symlinks need SeCreateSymbolicLinkPrivilege")
+def test_link_user_entries_copy_keeps_existing_link(tmp_path: Path) -> None:
+    source = tmp_path / "user" / "plugins"
+    target = tmp_path / "state" / "plugins"
+    source.mkdir(parents=True)
+    target.mkdir(parents=True)
+    payload = source / "installed_plugins.json"
+    payload.write_text('{"ok": true}\n', encoding="utf-8")
+    existing = target / "installed_plugins.json"
+    existing.symlink_to(payload)
+
+    link_user_entries(source, target, copy_names={"installed_plugins.json"})
+
+    assert existing.is_symlink()
+    assert _links_to(existing, payload)
 
 
 def test_link_codex_sessions_links_only_the_session_directory(tmp_path: Path) -> None:
