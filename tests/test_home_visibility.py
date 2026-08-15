@@ -181,6 +181,10 @@ def test_grok_home_visibility_exposes_extensions_and_config(tmp_path: Path) -> N
     (user_home / "skills" / "skill-a").mkdir(parents=True)
     (user_home / "plugins" / "plugin-a").mkdir(parents=True)
     (user_home / "hooks" / "hook-a").mkdir(parents=True)
+    (user_home / "hooks" / "orca-status.json").write_text(
+        '{"hooks": {"SessionStart": []}}\n',
+        encoding="utf-8",
+    )
     installed = user_home / "installed-plugins"
     (installed / "plugin-a").mkdir(parents=True)
     (installed / "registry.json").write_text('{"plugin-a": {}}\n', encoding="utf-8")
@@ -203,6 +207,9 @@ official_marketplace_auto_installed = true
     assert _is_link(state_home / "skills" / "skill-a")
     assert _is_link(state_home / "plugins" / "plugin-a")
     assert _is_link(state_home / "hooks" / "hook-a")
+    hook_status = state_home / "hooks" / "orca-status.json"
+    assert hook_status.read_text(encoding="utf-8") == '{"hooks": {"SessionStart": []}}\n'
+    assert not _is_link(hook_status)
     assert _is_link(state_home / "installed-plugins" / "plugin-a")
     registry = state_home / "installed-plugins" / "registry.json"
     assert registry.read_text(encoding="utf-8") == '{"plugin-a": {}}\n'

@@ -1,7 +1,7 @@
 # Home Visibility 抽象与三端策略统一验证
-最后修改时间: 2026-08-15 22:30:43
+最后修改时间: 2026-08-15 23:48:38
 
-Review status: Draft
+Review status: Accepted
 
 ## Requirement alignment
 
@@ -29,6 +29,8 @@ Review status: Draft
 - `settings.py`：Grok user home 默认解析为 `~/.grok`。
 - `tui.py`：通过 `CodexHomeVisibility` 暴露 session，而非调用独立过程函数。
 - README、Requirement 和相关测试同步更新。
+- 后续补丁：`GrokHomeVisibility` 将 `hooks/orca-status.json` 改为复制，避免 Windows
+  跨卷硬链接失败后再走文件 symlink 触发 `WinError 1314`。
 
 ## Expected vs actual changed files
 
@@ -49,6 +51,12 @@ Review status: Draft
 
 本 verification 文档为验证阶段新增，当前未加入 staged diff。
 
+后续补丁改动：
+
+- `src/ccs_plus/home_visibility.py`：Grok `hooks` 增加 `copy_names={"orca-status.json"}`。
+- `tests/test_home_visibility.py`：断言 hook 目录仍链接，`orca-status.json` 为普通文件副本。
+- `docs/requirement/20260815-home-visibility-abstraction.md`：验收与决策补充 hook 状态文件复制。
+
 ## Acceptance checklist
 
 - [x] 存在统一基类、三个实现类和构造入口。
@@ -58,7 +66,7 @@ Review status: Draft
 - [x] Codex sessions、skills、plugins、配置表与 project trust 被实现类覆盖。
 - [x] Codex plugin 进程目录和安装 staging 保持隔离。
 - [x] Grok skills、plugins、hooks、installed plugins、MCP 和 marketplace 被实现类覆盖。
-- [x] Grok registry 使用复制，marketplace cache 不共享。
+- [x] Grok registry 与 `hooks/orca-status.json` 使用复制，marketplace cache 不共享。
 - [x] MCP 合并保留不同名 state 条目，同名 user 条目优先。
 - [x] README 与 Grok 默认 user home 已更新。
 - [x] 测试、lint、类型检查和 whitespace 检查通过。
@@ -76,6 +84,8 @@ Review status: Draft
 - 未发现遗漏的验收项。
 - Grok visibility 从历史需求的 MCP-only 扩展到 skills/plugins/hooks/marketplace；该变化已在本次
   Accepted Requirement 中明确取代旧约束，不属于未记录的范围扩张。
+- 首次验证后，Windows 实测 `hooks/orca-status.json` 跨卷链接失败。已按同一“索引/状态
+  文件复制”策略补进 Requirement 与实现，属于已记录的策略细化，不是未登记的范围扩张。
 
 ## Risks
 

@@ -1,5 +1,5 @@
 # Home Visibility 抽象与三端策略统一
-最后修改时间: 2026-08-15 22:24:52
+最后修改时间: 2026-08-15 23:46:45
 
 Review status: Accepted
 
@@ -49,7 +49,8 @@ Claude plugin 状态已引入 link/copy/skip 差异化处理，因此需要同�
 - Codex 覆盖 sessions、skills、plugins、MCP、marketplaces、shell policy 与当前项目 trust；
   plugin 进程目录和安装 staging 保持隔离。
 - Grok 默认从 `~/.grok` 获取用户扩展；覆盖 skills、plugins、hooks、installed plugins、
-  MCP 和 marketplace 配置；plugin registry 使用复制，marketplace cache 保持隔离。
+  MCP 和 marketplace 配置；plugin registry 与 hook 状态文件 `orca-status.json` 使用复制，
+  marketplace cache 保持隔离。hooks 下的目录仍按条目链接。
 - 同名 MCP 由 user home 覆盖 state home，不同名 state-home MCP 保留。
 - README 与配置默认值反映三端实际行为。
 - 相关测试、lint、类型检查和 diff whitespace 检查通过。
@@ -64,12 +65,18 @@ Claude plugin 状态已引入 link/copy/skip 差异化处理，因此需要同�
 - link/copy/skip 策略按各 CLI 实际目录结构分别制定，不要求三端使用相同文件名单。
 - 本任务作为独立需求记录，不修改已 Accepted 的历史 MCP propagation requirement。
 - Grok 的新策略取代历史需求中“仅同步 MCP、不共享 skills/plugins”的范围约束。
+- Grok `hooks/orca-status.json` 与 `installed-plugins/registry.json` 一样按索引/状态文件复制。
+  该文件内容使用绝对路径指向真实 user home，不需要共享 inode；Windows 上跨卷硬链接
+  和文件 symlink（`WinError 1314`，缺少 `SeCreateSymbolicLinkPrivilege`）都会失败，
+  复制不依赖符号链接特权。
 - 不提供历史隔离 home 的迁移逻辑；新策略只保证新建或符合当前结构的状态目录。
 
 ## Risk
 
 - CLI 升级可能改变内部目录或索引文件语义，需要通过测试和后续版本审视维护策略。
 - 目录 junction/symlink 会让隔离运行直接读写真实扩展目录，必须严格排除运行时临时目录。
+- Windows 文件 symlink 需要特权；未列入 copy 名单且跨卷的文件仍会走 hardlink → symlink，
+  失败后只记 warning 并跳过。
 - 配置合并若错误覆盖 provider、认证或模型配置，会破坏隔离边界；只允许合并明确列出的表。
 - Grok visibility 范围扩大后，用户安装的 hooks/plugins 会在受管启动中执行，应视为用户主动
   配置的可信扩展，但不得额外暴露认证和运行缓存。

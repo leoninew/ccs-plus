@@ -173,7 +173,11 @@ class GrokHomeVisibility(HomeVisibility):
             return
         link_user_entries(self.user_home / "skills", self.state_home / "skills")
         link_user_entries(self.user_home / "plugins", self.state_home / "plugins")
-        link_user_entries(self.user_home / "hooks", self.state_home / "hooks")
+        link_user_entries(
+            self.user_home / "hooks",
+            self.state_home / "hooks",
+            copy_names={"orca-status.json"},
+        )
         link_user_entries(
             self.user_home / "installed-plugins",
             self.state_home / "installed-plugins",
