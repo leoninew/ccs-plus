@@ -18,7 +18,7 @@ from ccs_plus.database import ProviderRepository
 from ccs_plus.domain import AppKind, NewProvider, Provider, ProviderError, validate_new_provider
 from ccs_plus.launch_history import LaunchHistory
 from ccs_plus.launcher import build_launch_spec, launch
-from ccs_plus.managed_config import remove_managed_codex_profile
+from ccs_plus.managed_config import remove_managed_config
 from ccs_plus.provider_transfer import build_backup_document, parse_backup_document
 from ccs_plus.settings import AppSettings, load_settings
 from ccs_plus.tui import LaunchPlan
@@ -187,11 +187,11 @@ def reset_providers(app_name: str, no_dry_run: bool) -> None:
                 click.echo(f"- {provider.app.value}/{provider.name}")
             return
         deleted = repository.reset_non_official([app])
-        if app is AppKind.CODEX:
+        if app.has_managed_profile_files:
             codex_home = _settings().codex.home
             for provider in targets:
-                if provider.app is AppKind.CODEX:
-                    remove_managed_codex_profile(codex_home, provider.id)
+                if provider.app.has_managed_profile_files:
+                    remove_managed_config(codex_home, provider.id)
         click.echo(f"Deleted {deleted} non-official providers.")
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -226,8 +226,8 @@ def delete_provider(app_name: str, name: str, yes: bool) -> None:
         repository = _repository()
         provider = repository.get_by_name(app, name)
         repository.delete(app, provider.id)
-        if provider.app is AppKind.CODEX:
-            remove_managed_codex_profile(_settings().codex.home, provider.id)
+        if provider.app.has_managed_profile_files:
+            remove_managed_config(_settings().codex.home, provider.id)
         click.echo(f"Deleted {app_name} provider {provider.name} from the database.")
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc

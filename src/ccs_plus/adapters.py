@@ -23,15 +23,69 @@ from ccs_plus.domain import (
 )
 
 
+class ProviderAdapter:
+    def new_settings(self, value: NewProvider, codex: CodexAppConfig) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def runtime(self, provider: Provider) -> RuntimeConfig:
+        raise NotImplementedError
+
+    def display(self, provider: Provider) -> ProviderDisplay:
+        raise NotImplementedError
+
+
+class ClaudeProviderAdapter(ProviderAdapter):
+    def new_settings(self, value: NewProvider, codex: CodexAppConfig) -> dict[str, Any]:
+        return _environment_settings(value)
+
+    def runtime(self, provider: Provider) -> RuntimeConfig:
+        if provider.is_official:
+            return ClaudeRuntime(provider, None, None, None, None)
+        return _environment_runtime(provider)
+
+    def display(self, provider: Provider) -> ProviderDisplay:
+        return _environment_display(provider)
+
+
+class CodexProviderAdapter(ProviderAdapter):
+    def new_settings(self, value: NewProvider, codex: CodexAppConfig) -> dict[str, Any]:
+        return _profile_settings(value, codex)
+
+    def runtime(self, provider: Provider) -> RuntimeConfig:
+        if provider.is_official:
+            return CodexRuntime(provider, None, None, None, None)
+        return _profile_runtime(provider)
+
+    def display(self, provider: Provider) -> ProviderDisplay:
+        return _profile_display(provider)
+
+
+class GrokProviderAdapter(ProviderAdapter):
+    def new_settings(self, value: NewProvider, codex: CodexAppConfig) -> dict[str, Any]:
+        return _registry_settings(value)
+
+    def runtime(self, provider: Provider) -> RuntimeConfig:
+        if provider.is_official:
+            return GrokRuntime(provider, None, None, None, None)
+        return _registry_runtime(provider)
+
+    def display(self, provider: Provider) -> ProviderDisplay:
+        return _registry_display(provider)
+
+
+def provider_adapter_for(app: AppKind) -> ProviderAdapter:
+    adapters: dict[AppKind, ProviderAdapter] = {
+        AppKind.CLAUDE: ClaudeProviderAdapter(),
+        AppKind.CODEX: CodexProviderAdapter(),
+        AppKind.GROK: GrokProviderAdapter(),
+    }
+    return adapters[app]
+
+
 def build_provider(value: NewProvider, codex: CodexAppConfig) -> Provider:
     created_at = int(time.time() * 1000)
     provider_id = f"ccs-plus-{uuid.uuid4().hex}"
-    if value.app is AppKind.CLAUDE:
-        settings = _new_claude_settings(value)
-    elif value.app is AppKind.CODEX:
-        settings = _new_codex_settings(value, codex)
-    else:
-        settings = _new_grok_settings(value)
+    settings = provider_adapter_for(value.app).new_settings(value, codex)
     return Provider(
         id=provider_id,
         app=value.app,
@@ -47,29 +101,19 @@ def build_provider(value: NewProvider, codex: CodexAppConfig) -> Provider:
 
 
 def runtime_from_provider(provider: Provider) -> RuntimeConfig:
-    if provider.is_official:
-        return _official_runtime(provider)
-    if provider.app is AppKind.CLAUDE:
-        return _claude_runtime(provider)
-    if provider.app is AppKind.CODEX:
-        return _codex_runtime(provider)
-    return _grok_runtime(provider)
+    return provider_adapter_for(provider.app).runtime(provider)
 
 
 def display_configuration(provider: Provider) -> ProviderDisplay:
     if provider.is_official:
         return ProviderDisplay(endpoint=None, model=None, effort=None)
     try:
-        if provider.app is AppKind.CLAUDE:
-            return _display_claude_configuration(provider)
-        if provider.app is AppKind.CODEX:
-            return _display_codex_configuration(provider)
-        return _display_grok_configuration(provider)
+        return provider_adapter_for(provider.app).display(provider)
     except ProviderError:
         return ProviderDisplay(endpoint=None, model=None, effort=None)
 
 
-def _new_claude_settings(value: NewProvider) -> dict[str, Any]:
+def _environment_settings(value: NewProvider) -> dict[str, Any]:
     model = value.model.strip()
     settings: dict[str, Any] = {
         "env": {
@@ -86,7 +130,7 @@ def _new_claude_settings(value: NewProvider) -> dict[str, Any]:
     return settings
 
 
-def _new_codex_settings(value: NewProvider, codex: CodexAppConfig) -> dict[str, Any]:
+def _profile_settings(value: NewProvider, codex: CodexAppConfig) -> dict[str, Any]:
     document = tomlkit.document()
     document["model_provider"] = "custom"
     document["model"] = value.model.strip()
@@ -111,7 +155,7 @@ def _new_codex_settings(value: NewProvider, codex: CodexAppConfig) -> dict[str, 
     }
 
 
-def _new_grok_settings(value: NewProvider) -> dict[str, Any]:
+def _registry_settings(value: NewProvider) -> dict[str, Any]:
     document = tomlkit.document()
     models = tomlkit.table()
     models["default"] = value.model.strip()
@@ -131,33 +175,7 @@ def _new_grok_settings(value: NewProvider) -> dict[str, Any]:
     return {"config": tomlkit.dumps(document)}
 
 
-def _official_runtime(provider: Provider) -> RuntimeConfig:
-    if provider.app is AppKind.CLAUDE:
-        return ClaudeRuntime(
-            provider=provider,
-            endpoint=None,
-            api_key=None,
-            model=None,
-            effort=None,
-        )
-    if provider.app is AppKind.CODEX:
-        return CodexRuntime(
-            provider=provider,
-            endpoint=None,
-            api_key=None,
-            model=None,
-            effort=None,
-        )
-    return GrokRuntime(
-        provider=provider,
-        endpoint=None,
-        api_key=None,
-        model=None,
-        effort=None,
-    )
-
-
-def _claude_runtime(provider: Provider) -> ClaudeRuntime:
+def _environment_runtime(provider: Provider) -> ClaudeRuntime:
     env = _mapping(provider.settings_config.get("env"), "Claude env")
     values: dict[str, str] = {}
     for key, value in env.items():
@@ -180,7 +198,7 @@ def _claude_runtime(provider: Provider) -> ClaudeRuntime:
     )
 
 
-def _display_claude_configuration(provider: Provider) -> ProviderDisplay:
+def _environment_display(provider: Provider) -> ProviderDisplay:
     env = _mapping(provider.settings_config.get("env"), "Claude env")
     return ProviderDisplay(
         endpoint=_as_string(env.get("ANTHROPIC_BASE_URL")),
@@ -190,7 +208,7 @@ def _display_claude_configuration(provider: Provider) -> ProviderDisplay:
     )
 
 
-def _codex_runtime(provider: Provider) -> CodexRuntime:
+def _profile_runtime(provider: Provider) -> CodexRuntime:
     document = _parse_toml(provider, "Codex")
     provider_id = _as_string(_value(document.get("model_provider")))
     providers = document.get("model_providers")
@@ -220,7 +238,7 @@ def _codex_runtime(provider: Provider) -> CodexRuntime:
     )
 
 
-def _display_codex_configuration(provider: Provider) -> ProviderDisplay:
+def _profile_display(provider: Provider) -> ProviderDisplay:
     document = _parse_toml(provider, "Codex")
     provider_id = _as_string(_value(document.get("model_provider")))
     providers = document.get("model_providers")
@@ -236,7 +254,7 @@ def _display_codex_configuration(provider: Provider) -> ProviderDisplay:
     )
 
 
-def _grok_runtime(provider: Provider) -> GrokRuntime:
+def _registry_runtime(provider: Provider) -> GrokRuntime:
     config_text = _as_string(provider.settings_config.get("config"))
     if not config_text:
         raise ProviderError(f"Grok provider {provider.id} has no settings_config.config.")
@@ -269,7 +287,7 @@ def _grok_runtime(provider: Provider) -> GrokRuntime:
     )
 
 
-def _display_grok_configuration(provider: Provider) -> ProviderDisplay:
+def _registry_display(provider: Provider) -> ProviderDisplay:
     document = _parse_toml(provider, "Grok")
     models = _mapping(_value(document.get("models")), "Grok models")
     model_name = _require(_as_string(_value(models.get("default"))), "Grok default model")

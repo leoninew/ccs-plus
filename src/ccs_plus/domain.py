@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any, Self
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from ccs_plus.settings import AppSettings
 
 
 class ProviderError(Exception):
@@ -22,6 +25,14 @@ class AppKind(StrEnum):
     @property
     def executable(self) -> str:
         return self.value
+
+    @property
+    def supports_permission_overrides(self) -> bool:
+        return self is AppKind.CODEX
+
+    @property
+    def has_managed_profile_files(self) -> bool:
+        return self is AppKind.CODEX
 
     @classmethod
     def from_cli_value(cls, value: str) -> AppKind:
@@ -91,6 +102,21 @@ class RuntimeProvider:
     model: str | None
     effort: str | None
 
+    def permission_overrides(self) -> tuple[str | None, str | None]:
+        return None, None
+
+    def with_permission_defaults(self, settings: AppSettings) -> Self:
+        return self
+
+    def with_permission_override(
+        self,
+        approval_policy: str | None,
+        sandbox_mode: str | None,
+    ) -> Self:
+        if approval_policy is not None or sandbox_mode is not None:
+            raise ProviderError("Permission overrides are not supported for this runtime.")
+        return self
+
 
 @dataclass(frozen=True)
 class ClaudeRuntime(RuntimeProvider):
@@ -98,6 +124,12 @@ class ClaudeRuntime(RuntimeProvider):
 
     claude_env: dict[str, str] = field(default_factory=dict)
     permission_mode: str | None = None
+
+    def with_permission_defaults(self, settings: AppSettings) -> Self:
+        return replace(
+            self,
+            permission_mode=self.permission_mode or settings.claude.permission_mode,
+        )
 
 
 @dataclass(frozen=True)
@@ -107,6 +139,29 @@ class CodexRuntime(RuntimeProvider):
     approval_policy: str | None = None
     sandbox_mode: str | None = None
 
+    def permission_overrides(self) -> tuple[str | None, str | None]:
+        return self.approval_policy, self.sandbox_mode
+
+    def with_permission_defaults(self, settings: AppSettings) -> Self:
+        return replace(
+            self,
+            approval_policy=self.approval_policy or settings.codex.approval_policy,
+            sandbox_mode=self.sandbox_mode or settings.codex.sandbox_mode,
+        )
+
+    def with_permission_override(
+        self,
+        approval_policy: str | None,
+        sandbox_mode: str | None,
+    ) -> Self:
+        return replace(
+            self,
+            approval_policy=(
+                approval_policy if approval_policy is not None else self.approval_policy
+            ),
+            sandbox_mode=sandbox_mode if sandbox_mode is not None else self.sandbox_mode,
+        )
+
 
 @dataclass(frozen=True)
 class GrokRuntime(RuntimeProvider):
@@ -114,6 +169,15 @@ class GrokRuntime(RuntimeProvider):
 
     sandbox_mode: str | None = None
     always_approve: bool | None = None
+
+    def with_permission_defaults(self, settings: AppSettings) -> Self:
+        return replace(
+            self,
+            sandbox_mode=self.sandbox_mode or settings.grok.sandbox_mode,
+            always_approve=(
+                settings.grok.always_approve if self.always_approve is None else self.always_approve
+            ),
+        )
 
 
 RuntimeConfig = ClaudeRuntime | CodexRuntime | GrokRuntime

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from ccs_plus.adapters import runtime_from_provider
@@ -39,6 +39,131 @@ class LaunchSpec:
     env: dict[str, str]
 
 
+@dataclass(frozen=True)
+class RuntimeLauncher:
+    executable: str
+    env: dict[str, str]
+    state_home: Path
+    model: str | None
+    effort: str | None
+    session_id: str | None
+
+    def build(self) -> list[str]:
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class ClaudeLauncher(RuntimeLauncher):
+    runtime: ClaudeRuntime
+    permission_mode: str
+
+    def build(self) -> list[str]:
+        _clear(self.env, "CLAUDE_CONFIG_DIR")
+        self.env["CLAUDE_CONFIG_DIR"] = str(self.state_home)
+        _clear(
+            self.env,
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "CLAUDE_CODE_EFFORT_LEVEL",
+        )
+        managed = None if self.runtime.provider.is_official else self.runtime
+        if managed is not None:
+            self.env.update(managed.claude_env)
+            if self.model:
+                for key in (
+                    "ANTHROPIC_MODEL",
+                    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                ):
+                    self.env[key] = self.model
+            if self.effort:
+                self.env["CLAUDE_CODE_EFFORT_LEVEL"] = self.effort
+        argv = [self.executable]
+        if self.session_id:
+            argv.extend(["--resume", self.session_id])
+        if managed is None and self.model:
+            argv.extend(["--model", self.model])
+        if self.effort:
+            argv.extend(["--effort", self.effort])
+        argv.extend(["--permission-mode", self.permission_mode])
+        return argv
+
+
+@dataclass(frozen=True)
+class CodexLauncher(RuntimeLauncher):
+    runtime: CodexRuntime
+    session_model_provider: str
+    approval_policy: str
+    sandbox_mode: str
+    visibility: CodexHomeVisibility
+
+    def build(self) -> list[str]:
+        _clear(self.env, "CODEX_HOME", "CODEX_SQLITE_HOME")
+        self.env["CODEX_HOME"] = str(self.state_home)
+        argv = [self.executable]
+        if self.session_id:
+            argv.extend(["resume", self.session_id])
+        managed = None if self.runtime.provider.is_official else self.runtime
+        if managed is not None:
+            profile = ensure_managed_config(
+                managed,
+                self.state_home,
+                self.model,
+                self.effort,
+                session_model_provider=self.session_model_provider,
+                approval_policy=self.approval_policy,
+                sandbox_mode=self.sandbox_mode,
+                visibility=self.visibility,
+            )
+            self.env[profile.env_key] = _required(managed.api_key, "Codex API key")
+            argv.extend(["--profile", profile.name])
+            self._append_model_and_effort(argv)
+            return argv
+        if not self.session_id:
+            self._append_model_and_effort(argv)
+        argv.extend(["--ask-for-approval", self.approval_policy])
+        return argv
+
+    def _append_model_and_effort(self, argv: list[str]) -> None:
+        if self.model:
+            argv.extend(["--model", self.model])
+        if self.effort:
+            argv.extend(["-c", f"model_reasoning_effort={self.effort}"])
+
+
+@dataclass(frozen=True)
+class GrokLauncher(RuntimeLauncher):
+    runtime: GrokRuntime
+    sandbox_mode: str
+    always_approve: bool
+
+    def build(self) -> list[str]:
+        _clear(self.env, "GROK_HOME", "GROK_MODELS_BASE_URL", "GROK_MODELS_LIST_URL")
+        self.env["GROK_HOME"] = str(self.state_home)
+        argv = [self.executable]
+        if self.session_id:
+            argv.extend(["--resume", self.session_id])
+        managed = None if self.runtime.provider.is_official else self.runtime
+        if managed is not None:
+            profile = ensure_managed_config(managed, self.state_home, self.model, self.effort)
+            self.env[profile.env_key] = _required(managed.api_key, "Grok API key")
+            argv.extend(["--model", profile.name])
+        elif self.model:
+            argv.extend(["--model", self.model])
+        if self.effort:
+            argv.extend(["--reasoning-effort", self.effort])
+        argv.extend(["--sandbox", self.sandbox_mode])
+        if self.always_approve:
+            argv.append("--always-approve")
+        return argv
+
+
 def build_launch_spec(
     provider: Provider,
     settings: AppSettings,
@@ -69,18 +194,10 @@ def build_launch_spec(
     if not executable:
         raise ProviderError(f"{provider.app.executable} CLI was not found on PATH.")
 
-    runtime = _runtime_with_permission_defaults(runtime_from_provider(provider), settings)
+    runtime = runtime_from_provider(provider).with_permission_defaults(settings)
     # TUI exposes permission overrides only for Codex.
     if approval_policy is not None or sandbox_mode is not None:
-        if not isinstance(runtime, CodexRuntime):
-            raise ProviderError("Permission overrides are only supported for Codex.")
-        runtime = replace(
-            runtime,
-            approval_policy=approval_policy
-            if approval_policy is not None
-            else runtime.approval_policy,
-            sandbox_mode=sandbox_mode if sandbox_mode is not None else runtime.sandbox_mode,
-        )
+        runtime = runtime.with_permission_override(approval_policy, sandbox_mode)
     env = environment_with_defaults()
     _apply_proxy(env, settings.proxy)
     state_home = settings.state_home(provider.app.value)
@@ -95,48 +212,73 @@ def build_launch_spec(
     effort = effort_override or runtime.effort
     session_id = resume.session_id if resume is not None else None
 
+    launcher = runtime_launcher_for(
+        runtime,
+        executable=executable,
+        env=env,
+        state_home=state_home,
+        model=model,
+        effort=effort,
+        session_id=session_id,
+        settings=settings,
+        visibility=visibility,
+    )
+    argv = launcher.build()
+    return LaunchSpec(argv=tuple(argv), cwd=working_directory, env=env)
+
+
+def runtime_launcher_for(
+    runtime: RuntimeConfig,
+    *,
+    executable: str,
+    env: dict[str, str],
+    state_home: Path,
+    model: str | None,
+    effort: str | None,
+    session_id: str | None,
+    settings: AppSettings,
+    visibility: object,
+) -> RuntimeLauncher:
     if isinstance(runtime, ClaudeRuntime):
-        argv = _claude_spec(
-            executable,
-            runtime,
-            env,
-            state_home,
-            model,
-            effort,
-            _required(runtime.permission_mode, "Claude permission_mode"),
-            session_id=session_id,
-        )
-    elif isinstance(runtime, CodexRuntime):
-        if not isinstance(visibility, CodexHomeVisibility):
-            raise ProviderError("Codex runtime received incompatible home visibility.")
-        argv = _codex_spec(
-            executable,
-            runtime,
-            env,
-            state_home,
+        return ClaudeLauncher(
+            executable=executable,
+            env=env,
+            state_home=state_home,
             model=model,
             effort=effort,
-            session_model_provider=settings.codex.session_model_provider,
-            approval_policy=runtime.approval_policy,
-            sandbox_mode=runtime.sandbox_mode,
             session_id=session_id,
+            runtime=runtime,
+            permission_mode=_required(runtime.permission_mode, "Claude permission_mode"),
+        )
+    if isinstance(runtime, CodexRuntime):
+        if not isinstance(visibility, CodexHomeVisibility):
+            raise ProviderError("Codex runtime received incompatible home visibility.")
+        return CodexLauncher(
+            executable=executable,
+            env=env,
+            state_home=state_home,
+            model=model,
+            effort=effort,
+            session_id=session_id,
+            runtime=runtime,
+            session_model_provider=settings.codex.session_model_provider,
+            approval_policy=_required(runtime.approval_policy, "Codex approval_policy"),
+            sandbox_mode=_required(runtime.sandbox_mode, "Codex sandbox_mode"),
             visibility=visibility,
         )
-    elif isinstance(runtime, GrokRuntime):
-        argv = _grok_spec(
-            executable,
-            runtime,
-            env,
-            state_home,
-            model,
-            effort,
-            _required(runtime.sandbox_mode, "Grok sandbox_mode"),
-            _required_bool(runtime.always_approve, "Grok always_approve"),
+    if isinstance(runtime, GrokRuntime):
+        return GrokLauncher(
+            executable=executable,
+            env=env,
+            state_home=state_home,
+            model=model,
+            effort=effort,
             session_id=session_id,
+            runtime=runtime,
+            sandbox_mode=_required(runtime.sandbox_mode, "Grok sandbox_mode"),
+            always_approve=_required_bool(runtime.always_approve, "Grok always_approve"),
         )
-    else:
-        raise ProviderError(f"Unsupported runtime for {provider.app.value}.")
-    return LaunchSpec(argv=tuple(argv), cwd=working_directory, env=env)
+    raise ProviderError(f"Unsupported runtime: {type(runtime).__name__}.")
 
 
 def launch(spec: LaunchSpec) -> int:
@@ -144,173 +286,6 @@ def launch(spec: LaunchSpec) -> int:
     completed = subprocess.run(list(spec.argv), cwd=spec.cwd, env=spec.env, check=False)
     logger.info("Native CLI exited with code %s", completed.returncode)
     return completed.returncode
-
-
-def _claude_spec(
-    executable: str,
-    runtime: ClaudeRuntime,
-    env: dict[str, str],
-    state_home: Path,
-    model: str | None,
-    effort: str | None,
-    permission_mode: str,
-    *,
-    session_id: str | None = None,
-) -> list[str]:
-    _clear(env, "CLAUDE_CONFIG_DIR")
-    env["CLAUDE_CONFIG_DIR"] = str(state_home)
-    _clear(
-        env,
-        "ANTHROPIC_BASE_URL",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_MODEL",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL",
-        "CLAUDE_CODE_EFFORT_LEVEL",
-    )
-    runtime_provider = None if runtime.provider.is_official else runtime
-    if runtime_provider is not None:
-        env.update(runtime_provider.claude_env)
-        if model:
-            for key in (
-                "ANTHROPIC_MODEL",
-                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-                "ANTHROPIC_DEFAULT_SONNET_MODEL",
-                "ANTHROPIC_DEFAULT_OPUS_MODEL",
-            ):
-                env[key] = model
-        if effort:
-            env["CLAUDE_CODE_EFFORT_LEVEL"] = effort
-    argv = [executable]
-    if session_id:
-        argv.extend(["--resume", session_id])
-    if runtime_provider is None and model:
-        argv.extend(["--model", model])
-    # Official Claude takes --effort; custom also gets it so session sticky UI cannot
-    # ignore CLAUDE_CODE_EFFORT_LEVEL / provider effortLevel.
-    if effort:
-        argv.extend(["--effort", effort])
-    argv.extend(["--permission-mode", permission_mode])
-    return argv
-
-
-def _codex_spec(
-    executable: str,
-    runtime: CodexRuntime,
-    env: dict[str, str],
-    state_home: Path,
-    model: str | None,
-    effort: str | None,
-    session_model_provider: str | None = None,
-    approval_policy: str | None = None,
-    sandbox_mode: str | None = None,
-    session_id: str | None = None,
-    visibility: CodexHomeVisibility | None = None,
-) -> list[str]:
-    _clear(env, "CODEX_HOME", "CODEX_SQLITE_HOME")
-    env["CODEX_HOME"] = str(state_home)
-    argv = [executable]
-    if session_id:
-        argv.extend(["resume", session_id])
-    runtime_provider = None if runtime.provider.is_official else runtime
-    if runtime_provider is not None:
-        profile = ensure_managed_config(
-            runtime_provider,
-            state_home,
-            model,
-            effort,
-            session_model_provider=session_model_provider,
-            approval_policy=approval_policy,
-            sandbox_mode=sandbox_mode,
-            visibility=visibility,
-        )
-        env[profile.env_key] = _required(runtime_provider.api_key, "Codex API key")
-        argv.extend(["--profile", profile.name])
-        # Profile holds provider endpoint/auth/permissions. Also pass model/effort on
-        # argv so Codex does not keep sticky collaboration-mode defaults.
-        _append_codex_model_and_effort(argv, model=model, effort=effort)
-        return argv
-    if not session_id:
-        _append_codex_model_and_effort(argv, model=model, effort=effort)
-    argv.extend(["--ask-for-approval", _required(runtime.approval_policy, "Codex approval_policy")])
-    return argv
-
-
-def _append_codex_model_and_effort(
-    argv: list[str],
-    *,
-    model: str | None,
-    effort: str | None,
-) -> None:
-    """Codex has --model, but effort is only a config key (no dedicated flag)."""
-    if model:
-        argv.extend(["--model", model])
-    if effort:
-        # -c values are parsed as TOML; bare tokens are strings.
-        argv.extend(["-c", f"model_reasoning_effort={effort}"])
-
-
-def _grok_spec(
-    executable: str,
-    runtime: GrokRuntime,
-    env: dict[str, str],
-    state_home: Path,
-    model: str | None,
-    effort: str | None,
-    sandbox_mode: str,
-    always_approve: bool,
-    *,
-    session_id: str | None = None,
-) -> list[str]:
-    _clear(env, "GROK_HOME", "GROK_MODELS_BASE_URL", "GROK_MODELS_LIST_URL")
-    env["GROK_HOME"] = str(state_home)
-    argv = [executable]
-    if session_id:
-        argv.extend(["--resume", session_id])
-    runtime_provider = None if runtime.provider.is_official else runtime
-    if runtime_provider is not None:
-        profile = ensure_managed_config(runtime_provider, state_home, model, effort)
-        env[profile.env_key] = _required(runtime_provider.api_key, "Grok API key")
-        # --model selects the managed profile name; API model id lives in config.
-        argv.extend(["--model", profile.name])
-    elif model:
-        argv.extend(["--model", model])
-    # Prefer CLI over [models].default_reasoning_effort so provider/override wins.
-    if effort:
-        argv.extend(["--reasoning-effort", effort])
-    argv.extend(["--sandbox", sandbox_mode])
-    if always_approve:
-        argv.append("--always-approve")
-    return argv
-
-
-def _runtime_with_permission_defaults(
-    runtime: RuntimeConfig,
-    settings: AppSettings,
-) -> RuntimeConfig:
-    """Use app settings only for permission values absent from a provider record."""
-    if isinstance(runtime, ClaudeRuntime):
-        return replace(
-            runtime,
-            permission_mode=runtime.permission_mode or settings.claude.permission_mode,
-        )
-    if isinstance(runtime, CodexRuntime):
-        return replace(
-            runtime,
-            approval_policy=runtime.approval_policy or settings.codex.approval_policy,
-            sandbox_mode=runtime.sandbox_mode or settings.codex.sandbox_mode,
-        )
-    return replace(
-        runtime,
-        sandbox_mode=runtime.sandbox_mode or settings.grok.sandbox_mode,
-        always_approve=(
-            settings.grok.always_approve
-            if runtime.always_approve is None
-            else runtime.always_approve
-        ),
-    )
 
 
 def _required(value: str | None, label: str) -> str:

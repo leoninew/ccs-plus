@@ -667,7 +667,7 @@ def test_provider_reset_removes_deleted_codex_profiles(monkeypatch, tmp_path) ->
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
     monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
     monkeypatch.setattr(
-        "ccs_plus.cli.remove_managed_codex_profile",
+        "ccs_plus.cli.remove_managed_config",
         lambda home, provider_id: removed.append((home, provider_id)),
     )
 
@@ -752,7 +752,7 @@ def test_provider_delete_removes_codex_profile(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
     monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
     monkeypatch.setattr(
-        "ccs_plus.cli.remove_managed_codex_profile",
+        "ccs_plus.cli.remove_managed_config",
         lambda home, provider_id: removed.append((home, provider_id)),
     )
 

@@ -149,9 +149,7 @@ def test_settings_claude_plugin_name_sets_from_yaml(settings_root) -> None:
 def test_settings_claude_empty_plugin_names_are_honored(settings_root) -> None:
     _add_claude_plugins_to_yaml(
         settings_root,
-        "    plugins:\n"
-        "      copy: []\n"
-        "      skip: []\n",
+        "    plugins:\n      copy: []\n      skip: []\n",
     )
 
     settings = load_settings(settings_root)
@@ -163,8 +161,7 @@ def test_settings_claude_empty_plugin_names_are_honored(settings_root) -> None:
 def test_settings_rejects_non_list_plugin_names(settings_root) -> None:
     _add_claude_plugins_to_yaml(
         settings_root,
-        "    plugins:\n"
-        "      copy: not-a-list\n",
+        "    plugins:\n      copy: not-a-list\n",
     )
 
     with pytest.raises(ProviderError, match=r"apps\.claude\.plugins\.copy"):

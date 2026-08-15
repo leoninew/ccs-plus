@@ -34,8 +34,7 @@ from prompt_toolkit.validation import ValidationError, Validator
 from prompt_toolkit.widgets import Box, TextArea
 
 from ccs_plus.adapters import display_configuration, runtime_from_provider
-from ccs_plus.domain import AppKind, CodexRuntime, Provider, ProviderError
-from ccs_plus.home_visibility import CodexHomeVisibility
+from ccs_plus.domain import AppKind, Provider, ProviderError
 from ccs_plus.launch_history import LaunchHistory
 from ccs_plus.sessions import Session, list_sessions
 from ccs_plus.settings import AppSettings
@@ -314,29 +313,29 @@ class _LaunchScreen:
         return best
 
     def _default_permission_index(self) -> int:
-        policy, sandbox = self._effective_codex_permissions()
+        policy, sandbox = self._effective_permissions()
         for index, preset in enumerate(APPROVAL_PRESETS):
             if preset.approval_policy == policy and preset.sandbox_mode == sandbox:
                 return index
         return 0
 
-    def _effective_codex_permissions(self) -> tuple[str, str]:
+    def _effective_permissions(self) -> tuple[str, str]:
         policy = self.settings.codex.approval_policy
         sandbox = self.settings.codex.sandbox_mode
         provider = self.current_provider
-        if provider is not None and provider.app is AppKind.CODEX:
+        if provider is not None and provider.app.supports_permission_overrides:
             try:
                 runtime = runtime_from_provider(provider)
             except ProviderError:
                 pass
             else:
-                if isinstance(runtime, CodexRuntime):
-                    policy = runtime.approval_policy or policy
-                    sandbox = runtime.sandbox_mode or sandbox
+                provider_policy, provider_sandbox = runtime.permission_overrides()
+                policy = provider_policy or policy
+                sandbox = provider_sandbox or sandbox
         return policy, sandbox
 
     def _sync_permission_selection(self) -> None:
-        if self.current_app is AppKind.CODEX:
+        if self.current_app.supports_permission_overrides:
             self.permission_index = self._default_permission_index()
         else:
             self.permission_index = 0
@@ -378,12 +377,6 @@ class _LaunchScreen:
     def all_sessions(self) -> list[Session]:
         app = self.current_app
         if app not in self._sessions_cache:
-            if app is AppKind.CODEX:
-                with contextlib.suppress(OSError):
-                    CodexHomeVisibility(
-                        self.settings.codex.home,
-                        self.settings.codex.user_home,
-                    ).expose_sessions()
             self._sessions_cache[app] = list_sessions(self.settings, app)
         return self._sessions_cache[app]
 
@@ -455,7 +448,7 @@ class _LaunchScreen:
         self._write_directory(str(self.default_cwd))
         self.status = ""
         self.status_error = False
-        if self.focus == "permissions" and self.current_app is not AppKind.CODEX:
+        if self.focus == "permissions" and not self.current_app.supports_permission_overrides:
             self.focus = "dir" if self.selected_session is None else "provider"
         if self.focus == "dir" and self.selected_session is not None:
             self.focus = "sessions"
@@ -480,7 +473,7 @@ class _LaunchScreen:
         order = ["app", "provider"]
         if self.selected_session is None:
             order.append("dir")
-        if self.current_app is AppKind.CODEX:
+        if self.current_app.supports_permission_overrides:
             order.append("permissions")
         order.extend(["sessions", "buttons"])
         return order
@@ -655,7 +648,7 @@ class _LaunchScreen:
             return
         approval: str | None = None
         sandbox: str | None = None
-        if self.current_app is AppKind.CODEX:
+        if self.current_app.supports_permission_overrides:
             preset = self.current_preset
             if self.permission_override:
                 approval = preset.approval_policy
@@ -1131,7 +1124,7 @@ class _LaunchScreen:
                 ),
                 ConditionalContainer(
                     self._highlighted_frame(self._permission_window, "permissions", "permissions"),
-                    filter=Condition(lambda: self.current_app is AppKind.CODEX),
+                    filter=Condition(lambda: self.current_app.supports_permission_overrides),
                 ),
                 Box(self._buttons_window, padding=1),
             ],

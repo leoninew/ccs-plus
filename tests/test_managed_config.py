@@ -9,9 +9,7 @@ from ccs_plus.home_visibility import CodexHomeVisibility
 from ccs_plus.managed_config import (
     ensure_managed_config as _ensure_managed_config,
 )
-from ccs_plus.managed_config import (
-    remove_managed_codex_profile,
-)
+from ccs_plus.managed_config import remove_managed_config
 
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
 
@@ -161,11 +159,11 @@ def test_remove_managed_codex_profile_requires_matching_marker(tmp_path) -> None
     profile = ensure_managed_config(runtime, tmp_path, None, None)
     path = tmp_path / f"{profile.name}.config.toml"
 
-    assert remove_managed_codex_profile(tmp_path, runtime.provider.id) is True
+    assert remove_managed_config(tmp_path, runtime.provider.id) is True
     assert not path.exists()
 
     path.write_text('model = "user-owned"\n', encoding="utf-8")
-    assert remove_managed_codex_profile(tmp_path, runtime.provider.id) is False
+    assert remove_managed_config(tmp_path, runtime.provider.id) is False
     assert path.exists()
 
 

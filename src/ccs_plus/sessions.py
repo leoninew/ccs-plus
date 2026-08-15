@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from ccs_plus.domain import AppKind
+from ccs_plus.home_visibility import CodexHomeVisibility
 from ccs_plus.settings import AppSettings
 
 logger = logging.getLogger(__name__)
@@ -28,16 +29,51 @@ class Session:
     modified_at: float
 
 
+class SessionReader:
+    def prepare(self, settings: AppSettings) -> None:
+        pass
+
+    def list(self, home: Path, app: AppKind) -> list[Session]:
+        raise NotImplementedError
+
+
+class CodexSessionReader(SessionReader):
+    def prepare(self, settings: AppSettings) -> None:
+        CodexHomeVisibility(
+            settings.codex.home,
+            settings.codex.user_home,
+        ).expose_sessions()
+
+    def list(self, home: Path, app: AppKind) -> list[Session]:
+        return _list_rollouts(home, app)
+
+
+class ClaudeSessionReader(SessionReader):
+    def list(self, home: Path, app: AppKind) -> list[Session]:
+        return _list_project_logs(home, app)
+
+
+class GrokSessionReader(SessionReader):
+    def list(self, home: Path, app: AppKind) -> list[Session]:
+        return _list_prompt_histories(home, app)
+
+
+def session_reader_for(app: AppKind) -> SessionReader:
+    readers: dict[AppKind, SessionReader] = {
+        AppKind.CODEX: CodexSessionReader(),
+        AppKind.CLAUDE: ClaudeSessionReader(),
+        AppKind.GROK: GrokSessionReader(),
+    }
+    return readers[app]
+
+
 def list_sessions(settings: AppSettings, app: AppKind) -> list[Session]:
     """Return recent sessions for ``app``, newest first."""
     home = settings.state_home(app.value)
+    reader = session_reader_for(app)
     try:
-        if app is AppKind.CODEX:
-            sessions = _list_codex(home, app)
-        elif app is AppKind.CLAUDE:
-            sessions = _list_claude(home, app)
-        else:
-            sessions = _list_grok(home, app)
+        reader.prepare(settings)
+        sessions = reader.list(home, app)
     except OSError as exc:
         logger.warning("Unable to list %s sessions under %s: %s", app.value, home, exc)
         return []
@@ -45,7 +81,7 @@ def list_sessions(settings: AppSettings, app: AppKind) -> list[Session]:
     return sessions[:_MAX_SESSIONS]
 
 
-def _list_codex(home: Path, app: AppKind) -> list[Session]:
+def _list_rollouts(home: Path, app: AppKind) -> list[Session]:
     root = home / "sessions"
     if not root.is_dir():
         return []
@@ -53,7 +89,7 @@ def _list_codex(home: Path, app: AppKind) -> list[Session]:
     ranked = _newest_files(root.rglob("rollout-*.jsonl"), limit=_MAX_SESSIONS * 2)
     sessions: list[Session] = []
     for path in ranked:
-        session = _parse_codex_session(path, app)
+        session = _parse_rollout(path, app)
         if session is not None:
             sessions.append(session)
         if len(sessions) >= _MAX_SESSIONS:
@@ -61,7 +97,7 @@ def _list_codex(home: Path, app: AppKind) -> list[Session]:
     return sessions
 
 
-def _parse_codex_session(path: Path, app: AppKind) -> Session | None:
+def _parse_rollout(path: Path, app: AppKind) -> Session | None:
     session_id = ""
     cwd = ""
     title = ""
@@ -133,7 +169,7 @@ def _newest_files(paths: Iterable[Path], *, limit: int) -> list[Path]:
     return [path for _, path in ranked[:limit]]
 
 
-def _list_claude(home: Path, app: AppKind) -> list[Session]:
+def _list_project_logs(home: Path, app: AppKind) -> list[Session]:
     root = home / "projects"
     if not root.is_dir():
         return []
@@ -147,7 +183,7 @@ def _list_claude(home: Path, app: AppKind) -> list[Session]:
     ranked = _newest_files(paths, limit=_MAX_SESSIONS * 2)
     sessions: list[Session] = []
     for path in ranked:
-        session = _parse_claude_session(path, app)
+        session = _parse_project_log(path, app)
         if session is not None:
             sessions.append(session)
         if len(sessions) >= _MAX_SESSIONS:
@@ -155,7 +191,7 @@ def _list_claude(home: Path, app: AppKind) -> list[Session]:
     return sessions
 
 
-def _parse_claude_session(path: Path, app: AppKind) -> Session | None:
+def _parse_project_log(path: Path, app: AppKind) -> Session | None:
     session_id = path.stem
     cwd = ""
     title = ""
@@ -212,7 +248,7 @@ def _parse_claude_session(path: Path, app: AppKind) -> Session | None:
     )
 
 
-def _list_grok(home: Path, app: AppKind) -> list[Session]:
+def _list_prompt_histories(home: Path, app: AppKind) -> list[Session]:
     root = home / "sessions"
     if not root.is_dir():
         return []
