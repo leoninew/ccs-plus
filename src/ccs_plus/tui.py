@@ -620,7 +620,6 @@ class _LaunchScreen:
         elif self.provider_index >= self._provider_scroll + capacity:
             self._provider_scroll = self.provider_index - capacity + 1
         self._provider_scroll = max(0, min(self._provider_scroll, max_scroll))
-        self._apply_window_scroll()
 
     def _ensure_session_visible(self) -> None:
         count = self._session_entry_count()
@@ -631,20 +630,6 @@ class _LaunchScreen:
         elif self.session_index >= self._session_scroll + capacity:
             self._session_scroll = self.session_index - capacity + 1
         self._session_scroll = max(0, min(self._session_scroll, max_scroll))
-        self._apply_window_scroll()
-
-    def _apply_window_scroll(self) -> None:
-        """Drive Window.vertical_scroll from logical entry offsets.
-
-        Full lists are rendered; the Window clips. This avoids stale
-        content-windowing when sibling panes resize (e.g. directory hide).
-        """
-        provider_window = getattr(self, "_provider_window", None)
-        if provider_window is not None:
-            provider_window.vertical_scroll = self._provider_scroll * _PROVIDER_ROW
-        sessions_window = getattr(self, "_sessions_window", None)
-        if sessions_window is not None:
-            sessions_window.vertical_scroll = self._session_scroll * _SESSION_ROW
 
     def _visible_lines(self, window: Window | None, *, default: int) -> int:
         if window is None:
@@ -652,7 +637,11 @@ class _LaunchScreen:
         info = window.render_info
         if info is None:
             return default
-        return max(1, info.window_height)
+        # Prefer content height (rows actually painted for the control body).
+        height = getattr(info, "window_height", None)
+        if not isinstance(height, int) or height < 1:
+            return default
+        return height
 
     def _resume_directory_text(self) -> StyleAndTextTuples:
         session = self.selected_session
@@ -976,10 +965,16 @@ class _LaunchScreen:
         elif len(entries) == 1:
             entries.append((-2, "(no sessions)", "launch first to populate"))
 
-        # Full list + Window.vertical_scroll (no content windowing) so sibling
-        # pane resize cannot leave the list under-filled for a frame.
+        # Content windowing: only paint the visible slice. prompt_toolkit's
+        # Window.vertical_scroll is rewritten every frame from cursor position
+        # (which stays at y=0 for our lists), so we cannot rely on it to keep
+        # the selection in view — slice the entries instead.
+        capacity = self._session_capacity()
+        start = max(0, min(self._session_scroll, max(0, len(entries) - 1)))
+        end = min(len(entries), start + capacity)
         focused = self.focus == "sessions"
-        for row, (key, title, subtitle) in enumerate(entries):
+        for row in range(start, end):
+            key, title, subtitle = entries[row]
             selected = row == self.session_index if key != -2 else False
 
             def handler(mouse_event: MouseEvent, entry: int = row, selectable: int = key) -> object:
@@ -1049,7 +1044,11 @@ class _LaunchScreen:
             lines.append(("class:item.muted", f"  {msg}\n"))
             return lines
         default_id = self.history.default_provider_id(self.current_app, self.all_app_providers)
-        for index, provider in enumerate(providers):
+        capacity = self._provider_capacity()
+        start = max(0, min(self._provider_scroll, max(0, len(providers) - 1)))
+        end = min(len(providers), start + capacity)
+        for index in range(start, end):
+            provider = providers[index]
             selected = index == self.provider_index
             display = display_configuration(provider)
             model = display.model or "no model"
@@ -1212,7 +1211,6 @@ class _LaunchScreen:
             content=session_control,
             wrap_lines=False,
             always_hide_cursor=True,
-            allow_scroll_beyond_bottom=False,
             height=D(preferred=20, min=6),
         )
         self._app_window = Window(
@@ -1222,7 +1220,6 @@ class _LaunchScreen:
             content=provider_control,
             wrap_lines=False,
             always_hide_cursor=True,
-            allow_scroll_beyond_bottom=False,
             # Fixed preferred height so directory show/hide does not reflow peers.
             height=D(preferred=12, min=8, max=14),
         )
@@ -1298,8 +1295,8 @@ class _LaunchScreen:
     # --- mouse handlers -----------------------------------------------
 
     def _click_session(self, row: int) -> None:
-        # Full-list content: Window maps screen y → content row (incl. scroll).
-        entry = row // _SESSION_ROW
+        # Content is already windowed; row is relative to the visible slice.
+        entry = self._session_scroll + row // _SESSION_ROW
         max_index = self._session_entry_count() - 1
         if 0 <= entry <= max_index:
             self._set_session(entry)
@@ -1309,7 +1306,7 @@ class _LaunchScreen:
             self._set_app(row)
 
     def _click_provider(self, row: int) -> None:
-        entry = row // _PROVIDER_ROW
+        entry = self._provider_scroll + row // _PROVIDER_ROW
         providers = self.filtered_providers
         if 0 <= entry < len(providers):
             self.provider_index = entry
