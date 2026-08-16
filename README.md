@@ -2,7 +2,7 @@
 
 <p align="center">
   <strong>cc-switch provider manager · multi-agent CLI launcher · fullscreen TUI</strong><br/>
-  <sub>Claude · Codex · Grok — one command, one pane, zero context switching</sub>
+  <sub>Claude · Codex · Grok · OpenCode — one command, one pane, zero context switching</sub>
 </p>
 
 <p align="center">
@@ -10,12 +10,12 @@
 </p>
 
 <p align="center">
-  <sub>Interactive launcher — app badges, provider picker, directory-scoped sessions, Codex permission presets</sub>
+  <sub>Interactive launcher — app badges, provider picker, directory-scoped sessions, per-app permission presets</sub>
 </p>
 
 ---
 
-`ccs-plus` 管理 [cc-switch](https://github.com/farion1231/cc-switch) SQLite 中的 Claude / Codex / Grok provider，并用选定 provider **启动原生 CLI**。
+`ccs-plus` 管理 [cc-switch](https://github.com/farion1231/cc-switch) SQLite 中的 Claude / Codex / Grok / OpenCode provider，并用选定 provider **启动原生 CLI**。
 
 只做 provider 管理、运行配置与启动编排——不实现 GUI、本地代理、请求转换或跨 CLI 会话迁移。
 
@@ -23,10 +23,10 @@
 
 | | |
 | --- | --- |
-| **Fullscreen TUI** | 无参启动进入 opencode 风格多面板：App · Provider · Directory · Permissions · Sessions |
+| **Fullscreen TUI** | 无参启动进入多面板：App · Provider · Directory · Permissions · Sessions |
 | **Session resume** | 按当前目录过滤历史会话，`a` 切换 all projects；Resume 使用 session 自带 cwd |
-| **Permission presets** | Codex：YOLO / On request / Auto workspace / Ask |
-| **Provider shortcuts** | `providers list` 显示 `c1` / `x2` / `g1`，`ccs-plus run x2` 一键启动 |
+| **Permission presets** | 按 app：Claude permission-mode · Codex YOLO/On request · Grok sandbox · OpenCode allow/ask/deny（± auto） |
+| **Provider shortcuts** | `providers list` 显示 `c1` / `x2` / `g1` / `o1`，`ccs-plus run x2` 一键启动 |
 | **Isolated homes** | 每 app 稳定 state home；skills / plugins / MCP 按目录结构可见，缓存与状态仍隔离 |
 | **Release binaries** | GitHub Release 自动构建 Linux / macOS / Windows 单文件二进制 |
 
@@ -92,7 +92,7 @@ Invoke-WebRequest -Uri "https://github.com/leoninew/ccs-plus/releases/latest/dow
   -OutFile "$env:LOCALAPPDATA\ccs-plus\ccs-plus.exe"
 ```
 
-仍需本机已安装 `claude` / `codex` / `grok`，并配置好 `settings.yaml` 与 cc-switch 数据库。
+仍需本机已安装要启动的 CLI（`claude` / `codex` / `grok` / `opencode`），并配置好 `settings.yaml` 与 cc-switch 数据库。
 
 ### 方式 B：从源码安装（开发）
 
@@ -118,11 +118,12 @@ uv run ccs-plus providers list
 
 | 操作 | 按键 |
 | --- | --- |
-| 切换面板 | `tab` / `s-tab` |
+| 切换面板 | `tab` / `s-tab` · `←`/`→`（左栏 ↔ sessions） |
 | 列表移动 | `↑↓` · `j/k` · 鼠标滚轮 |
 | 点选 | 鼠标点击 |
 | 过滤 provider / sessions | `/` 后输入 |
 | 会话范围 this dir ↔ all | sessions 焦点下按 `a` |
+| Launch ↔ Cancel | 按钮焦点下 `←`/`→` |
 | 启动 / 取消 | `enter`（Launch）· `esc` |
 | 数字跳转 | `1`–`9` |
 
@@ -145,24 +146,31 @@ CCS_PLUS_PROXY=http://127.0.0.1:7890
 uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-`proxy` 为 Claude / Codex / Grok 共用启动代理，写入 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`（及小写兼容变量）；空字符串会清除从父进程继承的代理。
+`proxy` 为 Claude / Codex / Grok / OpenCode 共用启动代理，写入 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`（及小写兼容变量）；空字符串会清除从父进程继承的代理。
 
-自定义 provider 的 endpoint、API Key、模型与推理强度来自数据库记录。`launch` 的 `--model` / `--effort` 仅单次覆盖。权限字段优先 provider：Claude `permission_mode`，Codex `approval_policy` + `sandbox_mode`，Grok `sandbox_mode` + `always_approve`；缺失时回退 `apps.*`。
+自定义 provider 的 endpoint、API Key、模型与推理强度来自数据库记录。`launch` 的 `--model` / `--effort` 仅单次覆盖。权限字段优先 provider：Claude `permission_mode`，Codex `approval_policy` + `sandbox_mode`，Grok `sandbox_mode` + `always_approve`，OpenCode `permission` + `--auto`；缺失时回退 `apps.*`。
 
 ## 使用方式
 
 ```bash
-# 列表（含启动编号 Alias：c1 / x2 / g1）
+# 列表（含启动编号 Alias：c1 / x2 / g1 / o1）
 uv run ccs-plus providers list
 uv run ccs-plus run x2
+uv run ccs-plus run o1
 
 uv run ccs-plus providers list --app codex --json
+uv run ccs-plus providers list --app opencode --json
 
 uv run ccs-plus providers add claude \
   --name "<provider-name>" \
   --endpoint "https://api.example.com/v1" \
   --model "<model-id>" \
   --effort high
+
+uv run ccs-plus providers add opencode \
+  --name "<provider-name>" \
+  --endpoint "https://api.example.com/v1" \
+  --model "provider-id/model-id"
 
 uv run ccs-plus providers show "<provider-name>"
 uv run ccs-plus providers export
@@ -176,6 +184,7 @@ uv run ccs-plus launch claude --provider "<provider-name>"
 uv run ccs-plus launch codex --provider "<provider-name>" --cwd "/path/to/project"
 uv run ccs-plus launch grok --provider "<provider-name>"
 uv run ccs-plus launch grok --provider "<provider-name>" --model "<model-id>" --effort high
+uv run ccs-plus launch opencode --provider "<provider-name>"
 ```
 
 所有命令支持 `-h` / `--help`。`Alias` 按当前列表排序、每 app 从 1 起。同名 provider 时启动/删除会拒绝。官方 provider 不可删。
@@ -215,10 +224,13 @@ make binary    # dist/ccs-plus （Windows: dist/ccs-plus.exe）
 | Claude | `apps.claude.home` | 环境变量 + 稳定 `CLAUDE_CONFIG_DIR` |
 | Codex | `apps.codex.home` | provider 独立 managed profile；统一会话 provider 标识 |
 | Grok | `apps.grok.home` | provider 独立 managed model profile |
+| OpenCode | `apps.opencode.home` | 隔离 `XDG_DATA_HOME` / `XDG_CONFIG_HOME` + `OPENCODE_CONFIG_CONTENT` |
 
-Claude、Codex 和 Grok 启动时会按各自目录结构，让隔离 Home 看见用户的 skills、plugins 与 MCP/扩展配置。运行缓存、临时目录和应用状态仍保留在隔离 Home，不会把整个用户 Home 直接替换为隔离 Home。
+Claude、Codex、Grok 与 OpenCode 启动时会按各自目录结构，让隔离 Home 看见用户的 skills、plugins 与 MCP/扩展配置。运行缓存、临时目录和应用状态仍保留在隔离 Home，不会把整个用户 Home 直接替换为隔离 Home。
 
-Claude 默认 `permission_mode` 模板为 `bypassPermissions`。Grok 模板默认 `workspace` + `always_approve`。Codex 新增/导入默认 `danger-full-access`；缺字段时回退 `apps.codex`。高权限仅应在可信目录与可信 provider 下使用。
+OpenCode 兼容 cc-switch 原生 provider 形状（`npm` / `options.baseURL` / `models`）；DB 无 OpenCode 行时会注入合成 `opencode-official`（本地 auth）。会话从 `share/opencode/opencode.db` 读取。
+
+Claude 默认 `permission_mode` 模板为 `bypassPermissions`。Grok 模板默认 `workspace` + `always_approve`。Codex 新增/导入默认 `danger-full-access`；缺字段时回退 `apps.codex`。OpenCode 默认 `permission_mode: allow`、`always_approve: false`。高权限仅应在可信目录与可信 provider 下使用。
 
 ## 开发
 
