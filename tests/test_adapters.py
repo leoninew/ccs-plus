@@ -153,6 +153,38 @@ wire_api = "chat"
         runtime_from_provider(provider)
 
 
+def test_opencode_runtime_parses_cc_switch_native_provider_shape() -> None:
+    provider = Provider(
+        id="nunu-grok",
+        app=AppKind.OPENCODE,
+        name="NuNu-grok",
+        settings_config={
+            "npm": "@ai-sdk/openai-compatible",
+            "options": {
+                "baseURL": "https://api.example.test/v1",
+                "apiKey": "secret-key",
+                "setCacheKey": True,
+            },
+            "models": {"grok-4.5": {"name": "grok-4.5"}},
+        },
+        endpoints=(),
+        category=None,
+        created_at=None,
+        notes=None,
+        is_current=False,
+    )
+
+    runtime = runtime_from_provider(provider)
+
+    assert isinstance(runtime, OpenCodeRuntime)
+    assert runtime.endpoint == "https://api.example.test/v1"
+    assert runtime.api_key == "secret-key"
+    assert runtime.model == "nunu-grok/grok-4.5"
+    display = display_configuration(provider)
+    assert display.endpoint == "https://api.example.test/v1"
+    assert display.model == "nunu-grok/grok-4.5"
+
+
 @pytest.mark.parametrize("app", list(AppKind))
 def test_display_configuration_uses_the_active_settings_config_route(app: AppKind) -> None:
     value = _new_value(app)
