@@ -39,6 +39,16 @@ class GrokSettings:
 
 
 @dataclass(frozen=True)
+class OpenCodeSettings:
+    """OpenCode isolated state under ``home`` (XDG data+config parent)."""
+
+    home: Path
+    permission_mode: str
+    always_approve: bool
+    user_home: Path | None = None
+
+
+@dataclass(frozen=True)
 class CodexSettings:
     home: Path
     user_home: Path
@@ -62,12 +72,14 @@ class AppSettings:
     claude: ClaudeSettings
     codex: CodexSettings
     grok: GrokSettings
+    opencode: OpenCodeSettings
 
     def state_home(self, app: str) -> Path:
         values = {
             "claude": self.claude.home,
             "codex": self.codex.home,
             "grok": self.grok.home,
+            "opencode": self.opencode.home,
         }
         try:
             return values[app]
@@ -230,6 +242,23 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
             always_approve=_resolve_bool(
                 _get(config, "apps.grok.always_approve"),
                 "apps.grok.always_approve",
+            ),
+        ),
+        opencode=OpenCodeSettings(
+            home=_resolve_path(root, _get(config, "apps.opencode.home"), "apps.opencode.home"),
+            user_home=_resolve_optional_user_home(
+                root,
+                _get(config, "apps.opencode.user_home"),
+                "apps.opencode.user_home",
+                ".config/opencode",
+            ),
+            permission_mode=_resolve_non_empty_string(
+                _get(config, "apps.opencode.permission_mode"),
+                "apps.opencode.permission_mode",
+            ),
+            always_approve=_resolve_bool(
+                _get(config, "apps.opencode.always_approve"),
+                "apps.opencode.always_approve",
             ),
         ),
     )

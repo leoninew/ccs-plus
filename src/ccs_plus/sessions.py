@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -58,11 +59,17 @@ class GrokSessionReader(SessionReader):
         return _list_prompt_histories(home, app)
 
 
+class OpenCodeSessionReader(SessionReader):
+    def list(self, home: Path, app: AppKind) -> list[Session]:
+        return _list_opencode_db(home, app)
+
+
 def session_reader_for(app: AppKind) -> SessionReader:
     readers: dict[AppKind, SessionReader] = {
         AppKind.CODEX: CodexSessionReader(),
         AppKind.CLAUDE: ClaudeSessionReader(),
         AppKind.GROK: GrokSessionReader(),
+        AppKind.OPENCODE: OpenCodeSessionReader(),
     }
     return readers[app]
 
@@ -327,6 +334,59 @@ def _parse_iso(value: str) -> float | None:
         return datetime.fromisoformat(text).timestamp()
     except ValueError:
         return None
+
+
+def _list_opencode_db(home: Path, app: AppKind) -> list[Session]:
+    """Read sessions from OpenCode SQLite under XDG data home."""
+    db_path = home / "share" / "opencode" / "opencode.db"
+    if not db_path.is_file():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        logger.warning("Unable to open OpenCode db %s: %s", db_path, exc)
+        return []
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, title, directory, time_updated, time_archived
+            FROM session
+            WHERE time_archived IS NULL
+            ORDER BY time_updated DESC
+            LIMIT ?
+            """,
+            (_MAX_SESSIONS,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Unable to query OpenCode sessions: %s", exc)
+        return []
+    finally:
+        conn.close()
+
+    sessions: list[Session] = []
+    for row in rows:
+        session_id = row["id"]
+        if not isinstance(session_id, str) or not session_id:
+            continue
+        title = row["title"] if isinstance(row["title"], str) else session_id
+        cwd = row["directory"] if isinstance(row["directory"], str) else ""
+        raw_ts = row["time_updated"]
+        if isinstance(raw_ts, (int, float)):
+            # OpenCode stores ms epoch.
+            timestamp = float(raw_ts) / 1000.0 if raw_ts > 1_000_000_000_000 else float(raw_ts)
+        else:
+            timestamp = db_path.stat().st_mtime
+        sessions.append(
+            Session(
+                app=app,
+                session_id=session_id,
+                title=_clip(title or Path(cwd).name or session_id[:8]),
+                cwd=cwd,
+                modified_at=timestamp,
+            )
+        )
+    return sessions
 
 
 def _clip(text: str) -> str:

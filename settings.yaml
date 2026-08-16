@@ -44,3 +44,8 @@ apps:
     home: data/grok
     sandbox_mode: workspace
     always_approve: true
+  opencode:
+    # Isolated XDG parent: data + config live under home/{share,config}/opencode.
+    home: data/opencode
+    permission_mode: allow
+    always_approve: false

@@ -18,11 +18,16 @@ def test_settings_default_homes_use_local_data(settings_root) -> None:
     assert settings.grok.sandbox_mode == "workspace"
     assert settings.grok.always_approve is True
     assert settings.grok.home == settings_root / "data" / "grok"
+    assert settings.opencode.home == settings_root / "data" / "opencode"
+    assert settings.opencode.permission_mode == "allow"
+    assert settings.opencode.always_approve is False
     assert settings.state_home("codex") == settings.codex.home
+    assert settings.state_home("opencode") == settings.opencode.home
     # user_home is not in settings.yaml; defaults to Path.home() / ".claude"|".codex"
     assert settings.claude.user_home == Path.home() / ".claude"
     assert settings.codex.user_home == Path.home() / ".codex"
     assert settings.grok.user_home == Path.home() / ".grok"
+    assert settings.opencode.user_home == Path.home() / ".config" / "opencode"
     # plugin name sets are not in settings.yaml; empty means no copies/skips
     assert settings.claude.plugin_copy_names == frozenset()
     assert settings.claude.plugin_skip_names == frozenset()
@@ -95,6 +100,11 @@ def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None
                 "    user_home: custom/grok-user",
                 "    sandbox_mode: workspace",
                 "    always_approve: true",
+                "  opencode:",
+                "    home: data/opencode",
+                "    user_home: custom/opencode-user",
+                "    permission_mode: allow",
+                "    always_approve: false",
                 "",
             ]
         ),
@@ -105,6 +115,7 @@ def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None
     assert settings.claude.user_home == settings_root / "custom" / "claude-user"
     assert settings.codex.user_home == settings_root / "custom" / "codex-user"
     assert settings.grok.user_home == settings_root / "custom" / "grok-user"
+    assert settings.opencode.user_home == settings_root / "custom" / "opencode-user"
 
 
 def test_blank_user_home_keeps_builtin_default(settings_root, monkeypatch) -> None:
@@ -201,6 +212,10 @@ def test_settings_rejects_missing_codex_defaults(settings_root) -> None:
                 "    home: data/grok",
                 "    sandbox_mode: workspace",
                 "    always_approve: true",
+                "  opencode:",
+                "    home: data/opencode",
+                "    permission_mode: allow",
+                "    always_approve: false",
                 "",
             ]
         ),

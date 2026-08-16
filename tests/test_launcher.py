@@ -37,6 +37,15 @@ def _provider(
     endpoint: str = "https://api.example.test/v1",
     model: str = "example-model",
 ):
+    if app is AppKind.OPENCODE and model == "example-model":
+        model = "custom/example-model"
+    effort = None
+    if app is AppKind.GROK:
+        effort = "xhigh"
+    elif app is AppKind.OPENCODE:
+        effort = "high"
+    else:
+        effort = "high"
     return build_provider(
         NewProvider(
             app=app,
@@ -44,7 +53,7 @@ def _provider(
             endpoint=endpoint,
             api_key="launch-secret-key",
             model=model,
-            effort="high" if app is not AppKind.GROK else "xhigh",
+            effort=effort,
             notes=None,
         ),
         _CODEX,
@@ -71,6 +80,7 @@ def test_launch_specs_set_global_proxy_and_clear_inherited_values(
         (AppKind.CLAUDE, ("--permission-mode", "bypassPermissions")),
         (AppKind.CODEX, ("--profile",)),
         (AppKind.GROK, ("--sandbox", "workspace", "--always-approve")),
+        (AppKind.OPENCODE, ()),
     ],
 )
 def test_launch_specs_keep_secret_out_of_argv_and_use_expected_home(
@@ -89,6 +99,15 @@ def test_launch_specs_keep_secret_out_of_argv_and_use_expected_home(
     assert "launch-secret-key" not in spec.argv
     assert all(argument in spec.argv for argument in required_args)
     state_home = settings.state_home(app.value)
+    if app is AppKind.OPENCODE:
+        assert spec.env["XDG_DATA_HOME"] == str(state_home / "share")
+        assert spec.env["XDG_CONFIG_HOME"] == str(state_home / "config")
+        assert "launch-secret-key" in spec.env["OPENCODE_CONFIG_CONTENT"]
+        assert '"permission":"allow"' in spec.env["OPENCODE_CONFIG_CONTENT"]
+        assert spec.argv[spec.argv.index("--variant") + 1] == "high"
+        assert "--auto" not in spec.argv
+        assert spec.cwd == tmp_path.resolve()
+        return
     state_keys = {
         AppKind.CLAUDE: "CLAUDE_CONFIG_DIR",
         AppKind.CODEX: "CODEX_HOME",
@@ -781,6 +800,7 @@ def test_launch_from_user_home_disables_home_visibility(
         AppKind.CLAUDE: settings.claude.user_home,
         AppKind.CODEX: settings.codex.user_home,
         AppKind.GROK: settings.grok.user_home,
+        AppKind.OPENCODE: settings.opencode.user_home,
     }
     user_home = user_homes[app]
     assert user_home is not None
@@ -789,7 +809,10 @@ def test_launch_from_user_home_disables_home_visibility(
     build_launch_spec(_provider(app), settings, tmp_path)
 
     state_home = settings.state_home(app.value)
-    assert not (state_home / "skills" / "shared-skill").exists()
+    if app is AppKind.OPENCODE:
+        assert not (state_home / "config" / "opencode" / "skills" / "shared-skill").exists()
+    else:
+        assert not (state_home / "skills" / "shared-skill").exists()
 
 
 def test_user_home_detection_does_not_match_descendant_projects(tmp_path) -> None:

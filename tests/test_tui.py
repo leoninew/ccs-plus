@@ -128,6 +128,12 @@ def test_permission_presets_match_native_cli_values() -> None:
         isinstance(preset.always_approve, bool) for preset in PERMISSION_PRESETS[AppKind.GROK]
     )
 
+    oc_modes = {preset.permission_mode for preset in PERMISSION_PRESETS[AppKind.OPENCODE]}
+    assert oc_modes <= {"allow", "ask", "deny"}
+    assert all(
+        isinstance(preset.always_approve, bool) for preset in PERMISSION_PRESETS[AppKind.OPENCODE]
+    )
+
 
 def test_launcher_selects_claude_permission_preset(tmp_path: Path) -> None:
     provider = _provider(AppKind.CLAUDE, "Claude P")

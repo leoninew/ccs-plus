@@ -8,11 +8,19 @@ from pathlib import Path
 import pytest
 import tomlkit
 
-from ccs_plus.domain import AppKind, ClaudeRuntime, CodexRuntime, GrokRuntime, Provider
+from ccs_plus.domain import (
+    AppKind,
+    ClaudeRuntime,
+    CodexRuntime,
+    GrokRuntime,
+    OpenCodeRuntime,
+    Provider,
+)
 from ccs_plus.home_visibility import (
     ClaudeHomeVisibility,
     CodexHomeVisibility,
     GrokHomeVisibility,
+    OpenCodeHomeVisibility,
     _is_link,
     _links_to,
     home_visibility_for,
@@ -58,6 +66,10 @@ def test_home_visibility_factory_selects_runtime_implementation(
     assert isinstance(
         home_visibility_for(_runtime(GrokRuntime, AppKind.GROK), settings, tmp_path),
         GrokHomeVisibility,
+    )
+    assert isinstance(
+        home_visibility_for(_runtime(OpenCodeRuntime, AppKind.OPENCODE), settings, tmp_path),
+        OpenCodeHomeVisibility,
     )
 
 

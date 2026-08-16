@@ -46,7 +46,8 @@ class ProviderRepository:
                 """,
                 tuple(app.db_app_type for app in selected),
             ).fetchall()
-            return [self._row_to_provider(conn, row) for row in rows]
+            providers = [self._row_to_provider(conn, row) for row in rows]
+            return self._with_synthetic_officials(providers, selected)
         finally:
             conn.close()
 
@@ -348,3 +349,32 @@ class ProviderRepository:
             is_current=bool(row["is_current"]),
             meta=meta,
         )
+
+    @staticmethod
+    def _with_synthetic_officials(
+        providers: builtins.list[Provider],
+        selected: tuple[AppKind, ...],
+    ) -> builtins.list[Provider]:
+        """Ensure apps without a cc-switch row still expose a local/official entry.
+
+        OpenCode is not yet a first-class app_type in many cc-switch databases; inject
+        a synthetic official provider so the TUI/CLI can launch with local auth.
+        """
+        result = list(providers)
+        present_ids = {provider.id for provider in result}
+        if AppKind.OPENCODE in selected and "opencode-official" not in present_ids:
+            result.append(
+                Provider(
+                    id="opencode-official",
+                    app=AppKind.OPENCODE,
+                    name="OpenCode Official",
+                    settings_config={},
+                    endpoints=(),
+                    category="official",
+                    created_at=None,
+                    notes="Synthetic local OpenCode entry (not stored in cc-switch).",
+                    is_current=False,
+                    meta={"ccsPlusSynthetic": True},
+                )
+            )
+        return result

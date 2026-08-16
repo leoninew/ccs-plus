@@ -29,9 +29,10 @@ RUN_APP_PREFIXES = {
     "c": AppKind.CLAUDE,
     "x": AppKind.CODEX,
     "g": AppKind.GROK,
+    "o": AppKind.OPENCODE,
 }
 RUN_PREFIXES = {app: prefix for prefix, app in RUN_APP_PREFIXES.items()}
-RUN_SELECTOR = re.compile(r"(?P<app>[cxg])(?P<number>[1-9][0-9]*)", re.IGNORECASE)
+RUN_SELECTOR = re.compile(r"(?P<app>[cxgo])(?P<number>[1-9][0-9]*)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)

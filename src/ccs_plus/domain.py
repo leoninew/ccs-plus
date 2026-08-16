@@ -17,6 +17,7 @@ class AppKind(StrEnum):
     CLAUDE = "claude"
     CODEX = "codex"
     GROK = "grok"
+    OPENCODE = "opencode"
 
     @property
     def db_app_type(self) -> str:
@@ -41,6 +42,7 @@ class AppKind(StrEnum):
             AppKind.CLAUDE: "Claude",
             AppKind.CODEX: "Codex",
             AppKind.GROK: "Grok",
+            AppKind.OPENCODE: "OpenCode",
         }[self]
 
     @property
@@ -50,6 +52,7 @@ class AppKind(StrEnum):
             AppKind.CLAUDE: "Cl",
             AppKind.CODEX: "Cx",
             AppKind.GROK: "Gk",
+            AppKind.OPENCODE: "Oc",
         }[self]
 
     @property
@@ -69,6 +72,7 @@ OFFICIAL_PROVIDER_IDS = {
     "claude-official",
     "codex-official",
     "grokbuild-official",
+    "opencode-official",
 }
 
 
@@ -231,7 +235,45 @@ class GrokRuntime(RuntimeProvider):
         )
 
 
-RuntimeConfig = ClaudeRuntime | CodexRuntime | GrokRuntime
+@dataclass(frozen=True)
+class OpenCodeRuntime(RuntimeProvider):
+    """OpenCode-specific permission and auto-approve settings."""
+
+    # Global permission default: allow | ask | deny (OpenCode config `permission`).
+    permission_mode: str | None = None
+    # Maps to CLI `--auto` (auto-approve prompts that are not denied).
+    always_approve: bool | None = None
+
+    def with_permission_defaults(self, settings: AppSettings) -> Self:
+        return replace(
+            self,
+            permission_mode=self.permission_mode or settings.opencode.permission_mode,
+            always_approve=(
+                settings.opencode.always_approve
+                if self.always_approve is None
+                else self.always_approve
+            ),
+        )
+
+    def with_permission_override(
+        self,
+        approval_policy: str | None = None,
+        sandbox_mode: str | None = None,
+        *,
+        permission_mode: str | None = None,
+        always_approve: bool | None = None,
+    ) -> Self:
+        del approval_policy, sandbox_mode
+        return replace(
+            self,
+            permission_mode=(
+                permission_mode if permission_mode is not None else self.permission_mode
+            ),
+            always_approve=(always_approve if always_approve is not None else self.always_approve),
+        )
+
+
+RuntimeConfig = ClaudeRuntime | CodexRuntime | GrokRuntime | OpenCodeRuntime
 
 
 @dataclass(frozen=True)

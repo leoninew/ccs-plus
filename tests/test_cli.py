@@ -625,7 +625,7 @@ def test_provider_reset_requires_app() -> None:
 
     assert result.exit_code != 0
     assert "Missing argument" in result.output
-    assert "{claude|codex|grok}" in result.output
+    assert "{claude|codex|grok|opencode}" in result.output
 
 
 def test_provider_reset_deletes_non_official_providers(monkeypatch) -> None:

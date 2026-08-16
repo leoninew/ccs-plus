@@ -12,6 +12,7 @@ from ccs_plus.domain import (
     ClaudeRuntime,
     CodexRuntime,
     GrokRuntime,
+    OpenCodeRuntime,
     Provider,
     ProviderError,
     RuntimeConfig,
@@ -165,6 +166,100 @@ class GrokLauncher(RuntimeLauncher):
         return argv
 
 
+@dataclass(frozen=True)
+class OpenCodeLauncher(RuntimeLauncher):
+    runtime: OpenCodeRuntime
+    permission_mode: str
+    always_approve: bool
+
+    def build(self) -> list[str]:
+        # OpenCode resolves config/data via XDG; isolate under state_home.
+        data_home = self.state_home / "share"
+        config_home = self.state_home / "config"
+        data_home.mkdir(parents=True, exist_ok=True)
+        config_home.mkdir(parents=True, exist_ok=True)
+        _clear(
+            self.env,
+            "XDG_DATA_HOME",
+            "XDG_CONFIG_HOME",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENCODE_CONFIG_DIR",
+        )
+        self.env["XDG_DATA_HOME"] = str(data_home)
+        self.env["XDG_CONFIG_HOME"] = str(config_home)
+
+        managed = None if self.runtime.provider.is_official else self.runtime
+        if managed is not None:
+            content = _opencode_config_content(
+                managed,
+                model=self.model,
+                effort=self.effort,
+                permission_mode=self.permission_mode,
+            )
+            self.env["OPENCODE_CONFIG_CONTENT"] = content
+        else:
+            # Official / local auth: only inject permission override.
+            self.env["OPENCODE_CONFIG_CONTENT"] = _opencode_permission_content(
+                self.permission_mode
+            )
+
+        argv = [self.executable]
+        if self.session_id:
+            argv.extend(["--session", self.session_id])
+        if managed is None and self.model:
+            argv.extend(["--model", self.model])
+        if self.effort:
+            argv.extend(["--variant", self.effort])
+        if self.always_approve:
+            argv.append("--auto")
+        return argv
+
+
+def _opencode_permission_content(permission_mode: str) -> str:
+    import json
+
+    return json.dumps({"permission": permission_mode}, separators=(",", ":"))
+
+
+def _opencode_config_content(
+    runtime: OpenCodeRuntime,
+    *,
+    model: str | None,
+    effort: str | None,
+    permission_mode: str,
+) -> str:
+    import json
+
+    model_ref = model or runtime.model or ""
+    provider_id = "custom"
+    model_id = model_ref
+    if "/" in model_ref:
+        provider_id, model_id = model_ref.split("/", 1)
+    endpoint = _required(runtime.endpoint, "OpenCode endpoint")
+    api_key = _required(runtime.api_key, "OpenCode API key")
+    document: dict[str, object] = {
+        "model": f"{provider_id}/{model_id}",
+        "permission": permission_mode,
+        "provider": {
+            provider_id: {
+                "npm": "@ai-sdk/openai-compatible",
+                "options": {
+                    "apiKey": api_key,
+                    "baseURL": endpoint,
+                },
+                "models": {
+                    model_id: {
+                        "name": model_id,
+                    }
+                },
+            }
+        },
+    }
+    del effort  # variant is passed on CLI when set
+    return json.dumps(document, separators=(",", ":"))
+
+
 def build_launch_spec(
     provider: Provider,
     settings: AppSettings,
@@ -288,6 +383,18 @@ def runtime_launcher_for(
             runtime=runtime,
             sandbox_mode=_required(runtime.sandbox_mode, "Grok sandbox_mode"),
             always_approve=_required_bool(runtime.always_approve, "Grok always_approve"),
+        )
+    if isinstance(runtime, OpenCodeRuntime):
+        return OpenCodeLauncher(
+            executable=executable,
+            env=env,
+            state_home=state_home,
+            model=model,
+            effort=effort,
+            session_id=session_id,
+            runtime=runtime,
+            permission_mode=_required(runtime.permission_mode, "OpenCode permission_mode"),
+            always_approve=_required_bool(runtime.always_approve, "OpenCode always_approve"),
         )
     raise ProviderError(f"Unsupported runtime: {type(runtime).__name__}.")
 

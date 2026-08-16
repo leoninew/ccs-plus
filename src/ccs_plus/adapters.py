@@ -16,6 +16,7 @@ from ccs_plus.domain import (
     CodexRuntime,
     GrokRuntime,
     NewProvider,
+    OpenCodeRuntime,
     Provider,
     ProviderDisplay,
     ProviderError,
@@ -73,11 +74,25 @@ class GrokProviderAdapter(ProviderAdapter):
         return _registry_display(provider)
 
 
+class OpenCodeProviderAdapter(ProviderAdapter):
+    def new_settings(self, value: NewProvider, codex: CodexAppConfig) -> dict[str, Any]:
+        return _opencode_settings(value)
+
+    def runtime(self, provider: Provider) -> RuntimeConfig:
+        if provider.is_official:
+            return OpenCodeRuntime(provider, None, None, None, None)
+        return _opencode_runtime(provider)
+
+    def display(self, provider: Provider) -> ProviderDisplay:
+        return _opencode_display(provider)
+
+
 def provider_adapter_for(app: AppKind) -> ProviderAdapter:
     adapters: dict[AppKind, ProviderAdapter] = {
         AppKind.CLAUDE: ClaudeProviderAdapter(),
         AppKind.CODEX: CodexProviderAdapter(),
         AppKind.GROK: GrokProviderAdapter(),
+        AppKind.OPENCODE: OpenCodeProviderAdapter(),
     }
     return adapters[app]
 
@@ -297,6 +312,55 @@ def _registry_display(provider: Provider) -> ProviderDisplay:
         endpoint=_as_string(_value(model_config.get("base_url"))),
         model=_as_string(_value(model_config.get("model"))) or model_name,
         effort=_as_string(_value(models.get("default_reasoning_effort"))),
+    )
+
+
+def _opencode_settings(value: NewProvider) -> dict[str, Any]:
+    # OpenCode model id is provider/model; store parts for managed config.
+    model = value.model.strip()
+    provider_id = "custom"
+    model_id = model
+    if "/" in model:
+        provider_id, model_id = model.split("/", 1)
+        provider_id = provider_id.strip() or "custom"
+        model_id = model_id.strip() or model
+    return {
+        "endpoint": value.endpoint.strip(),
+        "api_key": value.api_key,
+        "model": f"{provider_id}/{model_id}",
+        "provider_id": provider_id,
+        "model_id": model_id,
+        "effort": value.effort.strip() if value.effort else None,
+        "permission_mode": None,
+        "always_approve": None,
+    }
+
+
+def _opencode_runtime(provider: Provider) -> OpenCodeRuntime:
+    config = provider.settings_config
+    endpoint = _as_string(config.get("endpoint"))
+    api_key = _as_string(config.get("api_key"))
+    model = _as_string(config.get("model"))
+    _require(endpoint, "OpenCode endpoint")
+    _require(api_key, "OpenCode API key")
+    _require(model, "OpenCode model")
+    return OpenCodeRuntime(
+        provider=provider,
+        endpoint=endpoint,
+        api_key=api_key,
+        model=model,
+        effort=_as_string(config.get("effort")),
+        permission_mode=_as_string(config.get("permission_mode")),
+        always_approve=_as_bool(config.get("always_approve")),
+    )
+
+
+def _opencode_display(provider: Provider) -> ProviderDisplay:
+    config = provider.settings_config
+    return ProviderDisplay(
+        endpoint=_as_string(config.get("endpoint")),
+        model=_as_string(config.get("model")),
+        effort=_as_string(config.get("effort")),
     )
 
 

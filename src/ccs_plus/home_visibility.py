@@ -17,7 +17,14 @@ import portalocker
 import tomlkit
 from tomlkit import TOMLDocument
 
-from ccs_plus.domain import ClaudeRuntime, CodexRuntime, GrokRuntime, ProviderError, RuntimeConfig
+from ccs_plus.domain import (
+    ClaudeRuntime,
+    CodexRuntime,
+    GrokRuntime,
+    OpenCodeRuntime,
+    ProviderError,
+    RuntimeConfig,
+)
 from ccs_plus.settings import AppSettings
 
 logger = logging.getLogger(__name__)
@@ -226,7 +233,26 @@ def home_visibility_for(
         )
     if isinstance(runtime, GrokRuntime):
         return GrokHomeVisibility(state_home=state_home, user_home=settings.grok.user_home)
+    if isinstance(runtime, OpenCodeRuntime):
+        return OpenCodeHomeVisibility(
+            state_home=state_home,
+            user_home=settings.opencode.user_home,
+        )
     raise ProviderError(f"Unsupported home visibility runtime: {type(runtime).__name__}.")
+
+
+@dataclass(frozen=True)
+class OpenCodeHomeVisibility(HomeVisibility):
+    """Link user OpenCode skills/plugins into the isolated config tree."""
+
+    def apply(self) -> None:
+        if self.user_home is None:
+            return
+        # User config lives at ~/.config/opencode; isolated at state/config/opencode.
+        target_config = self.state_home / "config" / "opencode"
+        target_config.mkdir(parents=True, exist_ok=True)
+        for name in ("skills", "plugins", "agents", "commands", "tools", "themes"):
+            link_user_entries(self.user_home / name, target_config / name)
 
 
 def link_user_entries(

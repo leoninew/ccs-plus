@@ -12,6 +12,7 @@ from ccs_plus.settings import (
     ClaudeSettings,
     CodexSettings,
     GrokSettings,
+    OpenCodeSettings,
 )
 
 
@@ -86,9 +87,12 @@ def make_app_settings(
     claude_permission_mode: str = "bypassPermissions",
     grok_sandbox_mode: str = "workspace",
     grok_always_approve: bool = True,
+    opencode_permission_mode: str = "allow",
+    opencode_always_approve: bool = False,
     claude_user_home: Path | None = None,
     codex_user_home: Path | None = None,
     grok_user_home: Path | None = None,
+    opencode_user_home: Path | None = None,
 ) -> AppSettings:
     return AppSettings(
         project_root=root,
@@ -112,6 +116,14 @@ def make_app_settings(
             sandbox_mode=grok_sandbox_mode,
             always_approve=grok_always_approve,
             user_home=grok_user_home if grok_user_home is not None else root / "user-grok",
+        ),
+        opencode=OpenCodeSettings(
+            home=root / "opencode",
+            permission_mode=opencode_permission_mode,
+            always_approve=opencode_always_approve,
+            user_home=(
+                opencode_user_home if opencode_user_home is not None else root / "user-opencode"
+            ),
         ),
     )
 
@@ -145,6 +157,10 @@ def settings_root(tmp_path: Path, database_path: Path) -> Path:
                 "    home: data/grok",
                 "    sandbox_mode: workspace",
                 "    always_approve: true",
+                "  opencode:",
+                "    home: data/opencode",
+                "    permission_mode: allow",
+                "    always_approve: false",
                 "",
             ]
         ),

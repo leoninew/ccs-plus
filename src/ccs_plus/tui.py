@@ -40,6 +40,7 @@ from ccs_plus.domain import (
     ClaudeRuntime,
     CodexRuntime,
     GrokRuntime,
+    OpenCodeRuntime,
     Provider,
     ProviderError,
 )
@@ -72,15 +73,21 @@ STYLE = Style.from_dict(
         "badge.claude": "bg:#d97706 #0a0e14 bold",
         "badge.codex": "bg:#10b981 #0a0e14 bold",
         "badge.grok": "bg:#a855f7 #0a0e14 bold",
+        "badge.opencode": "bg:#38bdf8 #0a0e14 bold",
         "badge.claude.focused": "bg:#fbbf24 #0a0e14 bold",
         "badge.codex.focused": "bg:#34d399 #0a0e14 bold",
         "badge.grok.focused": "bg:#c084fc #0a0e14 bold",
+        "badge.opencode.focused": "bg:#7dd3fc #0a0e14 bold",
         "status.ok": "#3fb950 bold",
         "status.err": "#ff7b72 bold",
         "button.launch": "bg:#238636 #ffffff bold",
-        "button.launch.focused": "bg:#3fb950 #000000 bold underline",
+        "button.launch.focused": "bg:#3fb950 #0a0e14 bold",
+        "button.launch.border": "bg:#238636 #2ea043 bold",
+        "button.launch.border.focused": "bg:#3fb950 #56d364 bold",
         "button.cancel": "bg:#6e2121 #ffffff bold",
-        "button.cancel.focused": "bg:#ff7b72 #000000 bold underline",
+        "button.cancel.focused": "bg:#ff7b72 #0a0e14 bold",
+        "button.cancel.border": "bg:#6e2121 #da3633 bold",
+        "button.cancel.border.focused": "bg:#ff7b72 #ff9b95 bold",
         "text-area": "bg:#0d1117 #f0f6fc",
         "text-area.focused": "bg:#161b22 #ffffff bold",
     }
@@ -213,6 +220,43 @@ PERMISSION_PRESETS: dict[AppKind, tuple[PermissionPreset, ...]] = {
             "Strict",
             "strict sandbox · confirm tools",
             sandbox_mode="strict",
+            always_approve=False,
+        ),
+    ),
+    AppKind.OPENCODE: (
+        PermissionPreset(
+            "allow",
+            "Allow all",
+            "permission allow · confirm when needed",
+            permission_mode="allow",
+            always_approve=False,
+        ),
+        PermissionPreset(
+            "allow-auto",
+            "Allow + auto",
+            "permission allow · auto-approve prompts",
+            permission_mode="allow",
+            always_approve=True,
+        ),
+        PermissionPreset(
+            "ask",
+            "Ask",
+            "permission ask · confirm tools",
+            permission_mode="ask",
+            always_approve=False,
+        ),
+        PermissionPreset(
+            "ask-auto",
+            "Ask + auto",
+            "permission ask · auto-approve non-denied",
+            permission_mode="ask",
+            always_approve=True,
+        ),
+        PermissionPreset(
+            "deny",
+            "Deny",
+            "permission deny · block tool actions",
+            permission_mode="deny",
             always_approve=False,
         ),
     ),
@@ -473,6 +517,12 @@ class _LaunchScreen:
                 and preset.always_approve is always
             ):
                 return index
+            if (
+                self.current_app is AppKind.OPENCODE
+                and preset.permission_mode == mode
+                and preset.always_approve is always
+            ):
+                return index
         return 0
 
     def _effective_permission_values(
@@ -491,6 +541,13 @@ class _LaunchScreen:
                     self.settings.codex.sandbox_mode,
                     None,
                 )
+            if app is AppKind.OPENCODE:
+                return (
+                    self.settings.opencode.permission_mode,
+                    None,
+                    None,
+                    self.settings.opencode.always_approve,
+                )
             return None, None, self.settings.grok.sandbox_mode, self.settings.grok.always_approve
         try:
             runtime = runtime_from_provider(provider).with_permission_defaults(self.settings)
@@ -504,6 +561,13 @@ class _LaunchScreen:
                     self.settings.codex.sandbox_mode,
                     None,
                 )
+            if app is AppKind.OPENCODE:
+                return (
+                    self.settings.opencode.permission_mode,
+                    None,
+                    None,
+                    self.settings.opencode.always_approve,
+                )
             return None, None, self.settings.grok.sandbox_mode, self.settings.grok.always_approve
         if isinstance(runtime, ClaudeRuntime):
             return runtime.permission_mode, None, None, None
@@ -511,6 +575,8 @@ class _LaunchScreen:
             return None, runtime.approval_policy, runtime.sandbox_mode, None
         if isinstance(runtime, GrokRuntime):
             return None, None, runtime.sandbox_mode, runtime.always_approve
+        if isinstance(runtime, OpenCodeRuntime):
+            return runtime.permission_mode, None, None, runtime.always_approve
         return None, None, None, None
 
     def _sync_permission_selection(self) -> None:
@@ -1285,15 +1351,19 @@ class _LaunchScreen:
 
         def button_fragments() -> StyleAndTextTuples:
             focused = self.focus == "buttons"
-            launch = (
-                "class:button.launch.focused"
-                if focused and self.button_index == 0
-                else "class:button.launch"
+            launch_focus = focused and self.button_index == 0
+            cancel_focus = focused and self.button_index == 1
+            launch = "class:button.launch.focused" if launch_focus else "class:button.launch"
+            cancel = "class:button.cancel.focused" if cancel_focus else "class:button.cancel"
+            launch_border = (
+                "class:button.launch.border.focused"
+                if launch_focus
+                else "class:button.launch.border"
             )
-            cancel = (
-                "class:button.cancel.focused"
-                if focused and self.button_index == 1
-                else "class:button.cancel"
+            cancel_border = (
+                "class:button.cancel.border.focused"
+                if cancel_focus
+                else "class:button.cancel.border"
             )
 
             def launch_handler(mouse_event: MouseEvent) -> object:
@@ -1312,13 +1382,29 @@ class _LaunchScreen:
                 self._cancel()
                 return None
 
-            # Wide padded labels so the bottom-left actions read as real buttons.
+            # Side-by-side square buttons; inner width must match top/bottom bar (12).
+            inner = 12
+            launch_label = f"{'▶ Launch':^{inner}}"
+            cancel_label = f"{'✕ Cancel':^{inner}}"
+            bar = "─" * inner
+            gap = "  "
             return [
-                (launch, "    ▶   Launch    \n", launch_handler),
-                (launch, "                  \n", launch_handler),
+                (launch_border, f"┌{bar}┐", launch_handler),
+                ("", gap),
+                (cancel_border, f"┌{bar}┐", cancel_handler),
                 ("", "\n"),
-                (cancel, "    ✕   Cancel    \n", cancel_handler),
-                (cancel, "                  \n", cancel_handler),
+                (launch_border, "│", launch_handler),
+                (launch, launch_label, launch_handler),
+                (launch_border, "│", launch_handler),
+                ("", gap),
+                (cancel_border, "│", cancel_handler),
+                (cancel, cancel_label, cancel_handler),
+                (cancel_border, "│", cancel_handler),
+                ("", "\n"),
+                (launch_border, f"└{bar}┘", launch_handler),
+                ("", gap),
+                (cancel_border, f"└{bar}┘", cancel_handler),
+                ("", "\n"),
             ]
 
         button_control = FormattedTextControl(
@@ -1356,7 +1442,12 @@ class _LaunchScreen:
             height=1,
             always_hide_cursor=True,
         )
-        self._buttons_window = Window(content=button_control, height=5, always_hide_cursor=True)
+        self._buttons_window = Window(
+            content=button_control,
+            height=3,
+            always_hide_cursor=True,
+            align=WindowAlign.CENTER,
+        )
 
         directory_slot = ConditionalContainer(
             content=self._highlighted_frame(self._dir_window, "dir", "directory"),
@@ -1499,21 +1590,25 @@ class _LaunchScreen:
 
         @bindings.add("right", filter=list_nav, eager=True)
         def _right(event: Any) -> None:
+            # Left/right switch columns (and Launch↔Cancel), not list items.
             if self.focus == "buttons":
                 self.button_index = 1
-            elif self.focus == "app":
-                self._set_app(min(self.app_index + 1, len(self.apps) - 1))
-            elif self.focus in {"sessions", "provider", "permissions"}:
-                self._navigate(1)
+            elif self.focus == "sessions":
+                pass
+            else:
+                self._set_focus("sessions")
 
         @bindings.add("left", filter=list_nav, eager=True)
         def _left(event: Any) -> None:
             if self.focus == "buttons":
-                self.button_index = 0
-            elif self.focus == "app":
-                self._set_app(max(self.app_index - 1, 0))
-            elif self.focus in {"sessions", "provider", "permissions"}:
-                self._navigate(-1)
+                if self.button_index == 1:
+                    self.button_index = 0
+                else:
+                    self._set_focus("app")
+            elif self.focus == "sessions":
+                self._set_focus("app")
+            else:
+                pass
 
         @bindings.add("enter", eager=True)
         def _enter(event: Any) -> None:
