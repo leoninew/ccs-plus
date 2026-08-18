@@ -8,6 +8,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Collection, Mapping, MutableMapping
+from contextlib import suppress
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -120,6 +121,7 @@ class CodexHomeVisibility(HomeVisibility):
             skip_names=self.plugins.skip_names,
             copy_names=self.plugins.copy_names,
         )
+        self._ensure_isolated_plugin_cache()
         if self.is_official:
             self._merge_into_state()
 
@@ -152,14 +154,14 @@ class CodexHomeVisibility(HomeVisibility):
             _merge_named_table(document, key, document, state_document, user_document)
         if user_document is not None:
             _merge_current_project_trust(document, user_document, self.project_directory)
-        self._warn_unregistered_plugin_caches(document)
+        self._prune_unregistered_plugin_caches(document)
 
     def _merge_into_state(self) -> None:
         if self.user_home is None:
             return
         user_document = _read_toml(self.user_home / "config.toml", "Codex user")
         if user_document is None:
-            self._warn_unregistered_plugin_caches(
+            self._prune_unregistered_plugin_caches(
                 _read_toml(self.state_home / "config.toml", "Codex state") or tomlkit.document()
             )
             return
@@ -171,23 +173,45 @@ class CodexHomeVisibility(HomeVisibility):
             for key in self.profile_extension_keys:
                 _merge_named_table(document, key, document, user_document)
             _merge_current_project_trust(document, user_document, self.project_directory)
+            self._prune_unregistered_plugin_caches(document)
             _write_toml_atomic(path, document)
 
-    def _warn_unregistered_plugin_caches(self, document: TOMLDocument) -> None:
+    def _ensure_isolated_plugin_cache(self) -> None:
+        if self.user_home is None:
+            return
+        user_cache = self.user_home / "plugins" / "cache"
+        state_cache = self.state_home / "plugins" / "cache"
+        if _is_link(state_cache) and _links_to(state_cache, user_cache):
+            try:
+                _remove_link(state_cache)
+            except OSError as exc:
+                logger.warning(
+                    "Failed to detach shared Codex plugin cache %s: %s", state_cache, exc
+                )
+                return
+        if _path_lexists(state_cache):
+            return
+        try:
+            state_cache.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            logger.warning("Failed to create isolated Codex plugin cache %s: %s", state_cache, exc)
+
+    def _prune_unregistered_plugin_caches(self, document: TOMLDocument) -> None:
         if self.user_home is None:
             return
         plugins = document.get("plugins")
-        registered = (
-            {
-                name
-                for name, settings in plugins.items()
-                if isinstance(name, str)
-                and isinstance(settings, Mapping)
-                and settings.get("enabled") is not False
-            }
-            if isinstance(plugins, Mapping)
-            else set()
-        )
+        if not isinstance(plugins, Mapping):
+            logger.warning(
+                "Skipping Codex plugin cache cleanup because plugin registrations are unavailable."
+            )
+            return
+        registered = {
+            name
+            for name, settings in plugins.items()
+            if isinstance(name, str)
+            and isinstance(settings, Mapping)
+            and settings.get("enabled") is not False
+        }
         cache = self.user_home / "plugins" / "cache"
         try:
             marketplaces = list(cache.iterdir()) if cache.is_dir() else []
@@ -207,11 +231,24 @@ class CodexHomeVisibility(HomeVisibility):
                     continue
                 plugin_id = f"{plugin_dir.name}@{marketplace.name}"
                 if plugin_id not in registered:
-                    logger.warning(
-                        "Codex plugin cache %s has no visible enabled plugin registration; "
-                        "leaving it inactive.",
-                        plugin_id,
-                    )
+                    if _is_link(plugin_dir):
+                        logger.warning(
+                            "Refusing to remove linked unregistered Codex plugin cache %s.",
+                            plugin_id,
+                        )
+                        continue
+                    try:
+                        shutil.rmtree(plugin_dir)
+                    except OSError as exc:
+                        logger.warning(
+                            "Failed to remove unregistered Codex plugin cache %s: %s",
+                            plugin_id,
+                            exc,
+                        )
+                    else:
+                        logger.info("Removed unregistered Codex plugin cache %s", plugin_id)
+            with suppress(OSError):
+                marketplace.rmdir()
 
 
 @dataclass(frozen=True)
@@ -488,6 +525,16 @@ def _link_one(source: Path, target: Path) -> None:
         return
     except OSError as exc:
         logger.warning("Failed to link %s -> %s: %s", target, source, exc)
+
+
+def _remove_link(path: Path) -> None:
+    if path.is_symlink():
+        path.unlink()
+        return
+    if os.name == "nt":
+        path.rmdir()
+        return
+    path.unlink()
 
 
 def _link_directory(source: Path, target: Path) -> None:

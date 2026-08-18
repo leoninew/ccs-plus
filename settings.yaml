@@ -51,6 +51,7 @@ apps:
           - .system
       plugins:
         skip:
+          - cache
           - .plugin-appserver
           - .remote-plugin-install-staging
   grok:

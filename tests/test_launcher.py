@@ -517,7 +517,8 @@ command = "mks-ttyd"
     skills = app_home / "skills"
     assert (skills / "pomelo-db").exists()
     assert not (skills / ".system").exists()
-    assert (app_home / "plugins" / "cache").exists()
+    assert (app_home / "plugins" / "cache").is_dir()
+    assert not _is_link(app_home / "plugins" / "cache")
     profile_name = spec.argv[spec.argv.index("--profile") + 1]
     profile_text = (app_home / f"{profile_name}.config.toml").read_text(encoding="utf-8")
     assert "mks-ttyd" in profile_text

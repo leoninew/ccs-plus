@@ -41,35 +41,35 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 # 交互式选择 Agent、provider 和工作目录
 ccsp
 
-# 查看 provider（p 是 provider 的短用法）
-ccsp p list
-ccsp p list --app codex --json
+# 查看 provider
+ccsp provider list
+ccsp provider list --app codex --json
 
 # 新增 provider
-ccsp p add claude `
+ccsp provider add claude `
   --name "<provider-name>" `
   --endpoint "https://api.example.com/v1" `
   --model "<model-id>"
 
 # 按列表编号启动 provider，例如 x2 表示第二个 Codex provider
-ccsp r x2
+ccsp run x2
 
 # 从指定目录启动
-ccsp l codex --provider "<provider-name>" --cwd "C:\work\project"
+ccsp launch codex --provider "<provider-name>" --cwd "C:\work\project"
 
 # 备份、恢复与重置：省略 app 时同时处理 Claude、Codex、Grok
-ccsp p export # data/providers-all-<timestamp>.json
-ccsp p export codex # data/providers-codex-<timestamp>.json
-ccsp p export codex "data/codex-providers.json"
-ccsp p import "data/providers-all-<timestamp>.json"
-ccsp p import codex "data/codex-providers.json"
-ccsp p reset
-ccsp p reset codex --no-dry-run
-ccsp p delete claude "<provider-name>" --yes
+ccsp provider export # data/providers-all-<timestamp>.json
+ccsp provider export codex # data/providers-codex-<timestamp>.json
+ccsp provider export codex "data/codex-providers.json"
+ccsp provider import "data/providers-all-<timestamp>.json"
+ccsp provider import codex "data/codex-providers.json"
+ccsp provider reset
+ccsp provider reset codex --no-dry-run
+ccsp provider delete claude "<provider-name>" --yes
 ```
 
 使用 `ccsp --help` 或任一子命令的 `--help` 查看完整参数。`p`、`l`、`r` 分别是
-`provider`、`launch`、`run` 的短用法；`p show` 会输出
+`provider`、`launch`、`run` 的简写；`provider show` 会输出
 API Key，只应在可信终端使用。
 
 ## 开发
