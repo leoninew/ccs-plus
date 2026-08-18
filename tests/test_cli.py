@@ -498,7 +498,8 @@ def test_provider_export_writes_default_encrypted_backup(monkeypatch, tmp_path) 
     settings = _settings(tmp_path)
 
     class Repository:
-        def list_stored(self):
+        def list_stored(self, apps):
+            assert apps == list(AppKind)
             return [provider]
 
     monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
@@ -511,7 +512,7 @@ def test_provider_export_writes_default_encrypted_backup(monkeypatch, tmp_path) 
 
     assert result.exit_code == 0
     assert "Exported 1 custom providers" in result.output
-    output_path = next((tmp_path / "data").glob("providers-*.json"))
+    output_path = next((tmp_path / "data").glob("providers-all-*.json"))
     assert "cli-secret-key" not in output_path.read_text(encoding="utf-8")
 
 
@@ -522,7 +523,8 @@ def test_provider_export_preserves_stored_provider_order(monkeypatch, tmp_path) 
     output_path = tmp_path / "providers.json"
 
     class Repository:
-        def list_stored(self):
+        def list_stored(self, apps):
+            assert apps == list(AppKind)
             return [second, first]
 
     monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
@@ -538,18 +540,63 @@ def test_provider_export_preserves_stored_provider_order(monkeypatch, tmp_path) 
     assert [record["name"] for record in document["providers"]] == ["Second", "First"]
 
 
-def test_provider_import_validates_before_writing(monkeypatch, tmp_path) -> None:
+def test_provider_export_limits_backup_to_selected_app(monkeypatch, tmp_path) -> None:
+    codex = _provider(AppKind.CODEX, "Codex Provider")
+    output_path = tmp_path / "providers.json"
+
+    class Repository:
+        def list_stored(self, apps):
+            assert apps == [AppKind.CODEX]
+            return [codex]
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    monkeypatch.setattr(
+        "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    )
+
+    result = CliRunner().invoke(main, ["providers", "export", "codex", str(output_path)])
+
+    assert result.exit_code == 0
+    document = json.loads(output_path.read_text(encoding="utf-8"))
+    assert [record["app"] for record in document["providers"]] == ["codex"]
+
+
+def test_provider_export_uses_app_name_in_default_backup_filename(monkeypatch, tmp_path) -> None:
+    provider = _provider(AppKind.CODEX)
+    settings = _settings(tmp_path)
+
+    class Repository:
+        def list_stored(self, apps):
+            assert apps == [AppKind.CODEX]
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: settings)
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    monkeypatch.setattr(
+        "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    )
+
+    result = CliRunner().invoke(main, ["providers", "export", "codex"])
+
+    assert result.exit_code == 0
+    assert len(list((tmp_path / "data").glob("providers-codex-*.json"))) == 1
+
+
+def test_provider_import_validates_complete_backup_before_filtering(monkeypatch, tmp_path) -> None:
     from ccs_plus.provider_transfer import build_backup_document
 
-    document = build_backup_document([_provider()], "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
-    document["providers"][0]["endpoint"] = "not-a-url"
+    document = build_backup_document(
+        [_provider(AppKind.CODEX), _provider(AppKind.CLAUDE)],
+        "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+    )
+    document["providers"][1]["endpoint"] = "not-a-url"
     input_path = tmp_path / "providers.json"
     input_path.write_text(json.dumps(document), encoding="utf-8")
     added = []
 
     class Repository:
-        def list(self):
-            return []
+        def list(self, apps):
+            raise AssertionError("Invalid backups must fail before checking existing providers.")
 
         def add_many(self, providers):
             added.extend(providers)
@@ -560,7 +607,7 @@ def test_provider_import_validates_before_writing(monkeypatch, tmp_path) -> None
         "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
     )
 
-    result = CliRunner().invoke(main, ["providers", "import", str(input_path)])
+    result = CliRunner().invoke(main, ["providers", "import", "codex", str(input_path)])
 
     assert result.exit_code != 0
     assert "Endpoint must be an absolute http or https URL" in result.output
@@ -580,7 +627,8 @@ def test_provider_import_adds_all_validated_providers(monkeypatch, tmp_path) -> 
     added = []
 
     class Repository:
-        def list(self):
+        def list(self, apps):
+            assert apps == list(AppKind)
             return []
 
         def add_many(self, providers):
@@ -600,12 +648,49 @@ def test_provider_import_adds_all_validated_providers(monkeypatch, tmp_path) -> 
     assert added[0].name == "Example Provider"
 
 
+def test_provider_import_limits_records_to_selected_app(monkeypatch, tmp_path) -> None:
+    from ccs_plus.provider_transfer import build_backup_document
+
+    codex = _provider(AppKind.CODEX, "Codex Provider")
+    claude = _provider(AppKind.CLAUDE, "Claude Provider")
+    input_path = tmp_path / "providers.json"
+    input_path.write_text(
+        json.dumps(
+            build_backup_document([codex, claude], "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+        ),
+        encoding="utf-8",
+    )
+    added = []
+
+    class Repository:
+        def list(self, apps):
+            assert apps == [AppKind.CODEX]
+            return []
+
+        def add_many(self, providers):
+            added.extend(providers)
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: _settings(tmp_path))
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    monkeypatch.setattr(
+        "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+    )
+
+    result = CliRunner().invoke(main, ["providers", "import", "codex", str(input_path)])
+
+    assert result.exit_code == 0
+    assert "Imported 1 custom providers" in result.output
+    assert [(provider.app, provider.name) for provider in added] == [
+        (AppKind.CODEX, "Codex Provider")
+    ]
+
+
 def test_provider_reset_defaults_to_dry_run(monkeypatch) -> None:
     provider = _provider()
 
     class Repository:
         def list(self, apps):
-            assert apps == [AppKind.CLAUDE]
+            assert apps == list(AppKind)
             return [provider]
 
         def reset_non_official(self, apps):
@@ -613,27 +698,19 @@ def test_provider_reset_defaults_to_dry_run(monkeypatch) -> None:
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
 
-    result = CliRunner().invoke(main, ["providers", "reset", "claude"])
+    result = CliRunner().invoke(main, ["providers", "reset"])
 
     assert result.exit_code == 0
     assert "would delete 1 non-official provider" in result.output
     assert "claude/Example Provider" in result.output
 
 
-def test_provider_reset_requires_app() -> None:
-    result = CliRunner().invoke(main, ["providers", "reset"])
-
-    assert result.exit_code != 0
-    assert "Missing argument" in result.output
-    assert "{claude|codex|grok}" in result.output
-
-
-def test_provider_reset_deletes_non_official_providers(monkeypatch) -> None:
+def test_provider_reset_deletes_all_non_official_providers_by_default(monkeypatch) -> None:
     deleted = []
 
     class Repository:
         def list(self, apps):
-            assert apps == [AppKind.CLAUDE]
+            assert apps == list(AppKind)
             return []
 
         def reset_non_official(self, apps):
@@ -642,10 +719,10 @@ def test_provider_reset_deletes_non_official_providers(monkeypatch) -> None:
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
 
-    result = CliRunner().invoke(main, ["providers", "reset", "claude", "--no-dry-run"])
+    result = CliRunner().invoke(main, ["providers", "reset", "--no-dry-run"])
 
     assert result.exit_code == 0
-    assert deleted == [[AppKind.CLAUDE]]
+    assert deleted == [list(AppKind)]
     assert result.output == "Deleted 2 non-official providers.\n"
 
 

@@ -23,9 +23,27 @@ def test_settings_default_homes_use_local_data(settings_root) -> None:
     assert settings.claude.user_home == Path.home() / ".claude"
     assert settings.codex.user_home == Path.home() / ".codex"
     assert settings.grok.user_home == Path.home() / ".grok"
-    # plugin name sets are not in settings.yaml; empty means no copies/skips
-    assert settings.claude.plugin_copy_names == frozenset()
-    assert settings.claude.plugin_skip_names == frozenset()
+    assert settings.claude.visibility.mcp_key == "mcpServers"
+    assert settings.claude.visibility.plugins.copy_names == (
+        ".last_inuse_sweep",
+        "blocklist.json",
+        "installed_plugins.json",
+        "known_marketplaces.json",
+    )
+    assert settings.codex.visibility.profile_extension_keys == (
+        "mcp_servers",
+        "plugins",
+        "marketplaces",
+        "shell_environment_policy",
+    )
+    assert settings.codex.visibility.skills.skip_names == (".system",)
+    assert settings.grok.visibility.extension_keys == (
+        "mcp_servers",
+        "skills",
+        "plugins",
+        "marketplace",
+        "hooks",
+    )
 
 
 def test_settings_loads_codex_provider_defaults(settings_root) -> None:
@@ -43,6 +61,7 @@ def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> No
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__USER_HOME", "custom/user-codex")
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__SESSION_MODEL_PROVIDER", "shared-custom")
     monkeypatch.setenv("CCS_PLUS_APPS__CLAUDE__PERMISSION_MODE", "manual")
+    monkeypatch.setenv("CCS_PLUS_APPS__CLAUDE__VISIBILITY__MCP_KEY", "customMcp")
     monkeypatch.setenv("CCS_PLUS_APPS__GROK__SANDBOX_MODE", "restricted")
     monkeypatch.setenv("CCS_PLUS_APPS__GROK__ALWAYS_APPROVE", "false")
     monkeypatch.setenv("CCS_PLUS_APPS__GROK__USER_HOME", "custom/user-grok")
@@ -54,6 +73,7 @@ def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> No
     assert settings.codex.user_home == settings_root / "custom" / "user-codex"
     assert settings.codex.session_model_provider == "shared-custom"
     assert settings.claude.permission_mode == "manual"
+    assert settings.claude.visibility.mcp_key == "customMcp"
     assert settings.grok.sandbox_mode == "restricted"
     assert settings.grok.always_approve is False
     assert settings.grok.user_home == settings_root / "custom" / "user-grok"
@@ -73,30 +93,20 @@ def test_empty_proxy_environment_override_clears_yaml_value(settings_root, monke
 
 
 def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None:
-    (settings_root / "settings.yaml").write_text(
-        "\n".join(
-            [
-                "database:",
-                '  path: "cc-switch.db"',
-                'encryption_key: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="',
-                "apps:",
-                "  claude:",
-                "    home: data/claude",
-                "    permission_mode: bypassPermissions",
-                "    user_home: custom/claude-user",
-                "  codex:",
-                "    home: data/codex",
-                "    user_home: custom/codex-user",
-                "    session_model_provider: ccs-plus-managed",
-                "    approval_policy: never",
-                "    sandbox_mode: danger-full-access",
-                "  grok:",
-                "    home: data/grok",
-                "    user_home: custom/grok-user",
-                "    sandbox_mode: workspace",
-                "    always_approve: true",
-                "",
-            ]
+    path = settings_root / "settings.yaml"
+    yaml = path.read_text(encoding="utf-8")
+    path.write_text(
+        yaml.replace(
+            "    home: data/claude\n",
+            "    home: data/claude\n    user_home: custom/claude-user\n",
+        )
+        .replace(
+            "    home: data/codex\n",
+            "    home: data/codex\n    user_home: custom/codex-user\n",
+        )
+        .replace(
+            "    home: data/grok\n",
+            "    home: data/grok\n    user_home: custom/grok-user\n",
         ),
         encoding="utf-8",
     )
@@ -117,54 +127,71 @@ def test_blank_user_home_keeps_builtin_default(settings_root, monkeypatch) -> No
     assert settings.grok.user_home == Path.home() / ".grok"
 
 
-def _add_claude_plugins_to_yaml(settings_root: Path, plugins_block: str) -> None:
+def _replace_claude_visibility_plugins(settings_root: Path, plugins_block: str) -> None:
     path = settings_root / "settings.yaml"
     yaml = path.read_text(encoding="utf-8")
     path.write_text(
         yaml.replace(
-            "    permission_mode: bypassPermissions\n",
-            f"    permission_mode: bypassPermissions\n{plugins_block}",
+            "      plugins:\n        copy:\n          - .last_inuse_sweep\n"
+            "          - blocklist.json\n"
+            "          - installed_plugins.json\n          - known_marketplaces.json\n"
+            "        skip:\n          - plugin-catalog-cache.json\n",
+            plugins_block,
         ),
         encoding="utf-8",
     )
 
 
 def test_settings_claude_plugin_name_sets_from_yaml(settings_root) -> None:
-    _add_claude_plugins_to_yaml(
+    _replace_claude_visibility_plugins(
         settings_root,
-        "    plugins:\n"
-        "      copy:\n"
-        "        - a.json\n"
-        "        - b.json\n"
-        "      skip:\n"
-        "        - c.json\n",
+        "      plugins:\n"
+        "        copy:\n"
+        "          - a.json\n"
+        "          - b.json\n"
+        "        skip:\n"
+        "          - c.json\n",
     )
 
     settings = load_settings(settings_root)
 
-    assert settings.claude.plugin_copy_names == frozenset({"a.json", "b.json"})
-    assert settings.claude.plugin_skip_names == frozenset({"c.json"})
+    assert settings.claude.visibility.plugins.copy_names == ("a.json", "b.json")
+    assert settings.claude.visibility.plugins.skip_names == ("c.json",)
 
 
 def test_settings_claude_empty_plugin_names_are_honored(settings_root) -> None:
-    _add_claude_plugins_to_yaml(
+    _replace_claude_visibility_plugins(
         settings_root,
-        "    plugins:\n      copy: []\n      skip: []\n",
+        "      plugins:\n        copy: []\n        skip: []\n",
     )
 
     settings = load_settings(settings_root)
 
-    assert settings.claude.plugin_copy_names == frozenset()
-    assert settings.claude.plugin_skip_names == frozenset()
+    assert settings.claude.visibility.plugins.copy_names == ()
+    assert settings.claude.visibility.plugins.skip_names == ()
 
 
 def test_settings_rejects_non_list_plugin_names(settings_root) -> None:
-    _add_claude_plugins_to_yaml(
+    _replace_claude_visibility_plugins(
         settings_root,
-        "    plugins:\n      copy: not-a-list\n",
+        "      plugins:\n        copy: not-a-list\n",
     )
 
-    with pytest.raises(ProviderError, match=r"apps\.claude\.plugins\.copy"):
+    with pytest.raises(ProviderError, match=r"apps\.claude\.visibility\.plugins\.copy"):
+        load_settings(settings_root)
+
+
+def test_settings_requires_cli_visibility_keys(settings_root) -> None:
+    path = settings_root / "settings.yaml"
+    path.write_text(
+        "\n".join(
+            line for line in path.read_text(encoding="utf-8").splitlines() if "mcp_key:" not in line
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProviderError, match=r"apps\.claude\.visibility\.mcp_key"):
         load_settings(settings_root)
 
 
@@ -184,26 +211,14 @@ def test_settings_rejects_example_encryption_key(settings_root, monkeypatch) -> 
 
 
 def test_settings_rejects_missing_codex_defaults(settings_root) -> None:
-    (settings_root / "settings.yaml").write_text(
+    path = settings_root / "settings.yaml"
+    path.write_text(
         "\n".join(
-            [
-                "database:",
-                '  path: "cc-switch.db"',
-                'encryption_key: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="',
-                "apps:",
-                "  claude:",
-                "    home: data/claude",
-                "    permission_mode: bypassPermissions",
-                "  codex:",
-                "    home: data/codex",
-                "    session_model_provider: ccs-plus-managed",
-                "  grok:",
-                "    home: data/grok",
-                "    sandbox_mode: workspace",
-                "    always_approve: true",
-                "",
-            ]
-        ),
+            line
+            for line in path.read_text(encoding="utf-8").splitlines()
+            if "approval_policy:" not in line
+        )
+        + "\n",
         encoding="utf-8",
     )
     with pytest.raises(ProviderError, match=r"apps\.codex\.approval_policy"):

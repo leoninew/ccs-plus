@@ -12,12 +12,28 @@ from ccs_plus.domain import AppKind, ClaudeRuntime, CodexRuntime, GrokRuntime, P
 from ccs_plus.home_visibility import (
     ClaudeHomeVisibility,
     CodexHomeVisibility,
+    DisabledHomeVisibility,
     GrokHomeVisibility,
     _is_link,
     _links_to,
     home_visibility_for,
     link_user_entries,
 )
+from ccs_plus.settings import EntryVisibilitySettings
+
+_CODEX_PROFILE_EXTENSION_KEYS = (
+    "mcp_servers",
+    "plugins",
+    "marketplaces",
+    "shell_environment_policy",
+)
+_GROK_EXTENSION_KEYS = ("mcp_servers", "skills", "plugins", "marketplace", "hooks")
+_CODEX_SKILLS = EntryVisibilitySettings(skip_names=(".system",))
+_CODEX_PLUGINS = EntryVisibilitySettings(
+    skip_names=(".plugin-appserver", ".remote-plugin-install-staging")
+)
+_GROK_HOOKS = EntryVisibilitySettings(copy_names=("orca-status.json",))
+_GROK_INSTALLED_PLUGINS = EntryVisibilitySettings(copy_names=("registry.json",))
 
 
 def _runtime(runtime_type, app: AppKind):
@@ -47,18 +63,35 @@ def test_home_visibility_factory_selects_runtime_implementation(
 ) -> None:
     settings = app_settings(tmp_path)
 
-    assert isinstance(
-        home_visibility_for(_runtime(ClaudeRuntime, AppKind.CLAUDE), settings, tmp_path),
-        ClaudeHomeVisibility,
+    claude = home_visibility_for(_runtime(ClaudeRuntime, AppKind.CLAUDE), settings, tmp_path)
+    codex = home_visibility_for(_runtime(CodexRuntime, AppKind.CODEX), settings, tmp_path)
+    grok = home_visibility_for(_runtime(GrokRuntime, AppKind.GROK), settings, tmp_path)
+
+    assert isinstance(claude, ClaudeHomeVisibility)
+    assert claude.mcp_key == settings.claude.visibility.mcp_key
+    assert claude.plugins == settings.claude.visibility.plugins
+    assert isinstance(codex, CodexHomeVisibility)
+    assert codex.profile_extension_keys == settings.codex.visibility.profile_extension_keys
+    assert codex.skills == settings.codex.visibility.skills
+    assert isinstance(grok, GrokHomeVisibility)
+    assert grok.extension_keys == settings.grok.visibility.extension_keys
+    assert grok.hooks == settings.grok.visibility.hooks
+
+
+def test_disabled_codex_visibility_keeps_profile_extension_policy(
+    tmp_path: Path, app_settings
+) -> None:
+    settings = app_settings(tmp_path)
+
+    visibility = home_visibility_for(
+        _runtime(CodexRuntime, AppKind.CODEX),
+        settings,
+        tmp_path,
+        enabled=False,
     )
-    assert isinstance(
-        home_visibility_for(_runtime(CodexRuntime, AppKind.CODEX), settings, tmp_path),
-        CodexHomeVisibility,
-    )
-    assert isinstance(
-        home_visibility_for(_runtime(GrokRuntime, AppKind.GROK), settings, tmp_path),
-        GrokHomeVisibility,
-    )
+
+    assert isinstance(visibility, DisabledHomeVisibility)
+    assert visibility.profile_extension_keys == settings.codex.visibility.profile_extension_keys
 
 
 def test_link_user_entries_links_each_child_not_the_parent(tmp_path: Path) -> None:
@@ -149,8 +182,11 @@ def test_claude_home_visibility_uses_plugin_name_sets(tmp_path: Path) -> None:
     ClaudeHomeVisibility(
         state_home=state_home,
         user_home=user_home,
-        plugin_copy_names={"installed_plugins.json"},
-        plugin_skip_names={"plugin-catalog-cache.json"},
+        mcp_key="mcpServers",
+        plugins=EntryVisibilitySettings(
+            copy_names=("installed_plugins.json",),
+            skip_names=("plugin-catalog-cache.json",),
+        ),
     ).apply()
 
     copied = state_home / "plugins" / "installed_plugins.json"
@@ -168,11 +204,37 @@ def test_codex_home_visibility_skips_plugin_runtime_directories(tmp_path: Path) 
     (user_home / "plugins" / ".plugin-appserver").mkdir()
     (user_home / "plugins" / ".remote-plugin-install-staging").mkdir()
 
-    CodexHomeVisibility(state_home, user_home).apply()
+    CodexHomeVisibility(
+        state_home,
+        user_home,
+        profile_extension_keys=_CODEX_PROFILE_EXTENSION_KEYS,
+        skills=_CODEX_SKILLS,
+        plugins=_CODEX_PLUGINS,
+    ).apply()
 
     assert _is_link(state_home / "plugins" / "cache")
     assert not (state_home / "plugins" / ".plugin-appserver").exists()
     assert not (state_home / "plugins" / ".remote-plugin-install-staging").exists()
+
+
+def test_codex_home_visibility_warns_for_unregistered_plugin_cache(tmp_path, caplog) -> None:
+    user_home = tmp_path / "user-codex"
+    (user_home / "plugins" / "cache" / "local-marketplace" / "example-plugin" / "1.0.0").mkdir(
+        parents=True
+    )
+    visibility = CodexHomeVisibility(
+        tmp_path / "state-codex",
+        user_home,
+        profile_extension_keys=_CODEX_PROFILE_EXTENSION_KEYS,
+        skills=_CODEX_SKILLS,
+        plugins=_CODEX_PLUGINS,
+    )
+
+    with caplog.at_level(logging.WARNING, logger="ccs_plus.home_visibility"):
+        visibility.merge_into(tomlkit.document())
+
+    assert "example-plugin@local-marketplace" in caplog.text
+    assert "leaving it inactive" in caplog.text
 
 
 def test_grok_home_visibility_exposes_extensions_and_config(tmp_path: Path) -> None:
@@ -202,7 +264,13 @@ official_marketplace_auto_installed = true
         encoding="utf-8",
     )
 
-    GrokHomeVisibility(state_home, user_home).apply()
+    GrokHomeVisibility(
+        state_home,
+        user_home,
+        extension_keys=_GROK_EXTENSION_KEYS,
+        hooks=_GROK_HOOKS,
+        installed_plugins=_GROK_INSTALLED_PLUGINS,
+    ).apply()
 
     assert _is_link(state_home / "skills" / "skill-a")
     assert _is_link(state_home / "plugins" / "plugin-a")
@@ -218,6 +286,59 @@ official_marketplace_auto_installed = true
     assert document["mcp_servers"]["user"]["command"] == "user"
     assert document["plugins"]["enabled"] == ["plugin-a"]
     assert document["marketplace"]["official_marketplace_auto_installed"] is True
+
+
+def test_grok_home_visibility_preserves_state_extension_keys(tmp_path: Path) -> None:
+    user_home = tmp_path / "user-grok"
+    state_home = tmp_path / "state-grok"
+    user_home.mkdir()
+    state_home.mkdir()
+    (state_home / "config.toml").write_text(
+        """
+[plugins]
+state_only = true
+shared = "state"
+
+[marketplace]
+state_only = true
+shared = "state"
+
+[hooks]
+state_only = true
+shared = "state"
+""",
+        encoding="utf-8",
+    )
+    (user_home / "config.toml").write_text(
+        """
+[plugins]
+user_only = true
+shared = "user"
+
+[marketplace]
+user_only = true
+shared = "user"
+
+[hooks]
+user_only = true
+shared = "user"
+""",
+        encoding="utf-8",
+    )
+
+    GrokHomeVisibility(
+        state_home,
+        user_home,
+        extension_keys=_GROK_EXTENSION_KEYS,
+        hooks=_GROK_HOOKS,
+        installed_plugins=_GROK_INSTALLED_PLUGINS,
+    ).apply()
+    document = tomlkit.parse((state_home / "config.toml").read_text(encoding="utf-8"))
+
+    for key in ("plugins", "marketplace", "hooks"):
+        assert document[key]["state_only"] is True
+        assert document[key]["user_only"] is True
+        assert document[key]["shared"] == "user"
 
 
 def test_link_user_entries_copies_named_files(tmp_path: Path) -> None:
@@ -346,7 +467,7 @@ def test_claude_home_visibility_merges_user_mcp_over_existing(tmp_path: Path) ->
         encoding="utf-8",
     )
 
-    ClaudeHomeVisibility(state, tmp_path / ".claude").apply()
+    ClaudeHomeVisibility(state, tmp_path / ".claude", mcp_key="mcpServers").apply()
 
     document = json.loads(target.read_text(encoding="utf-8"))
     assert document["theme"] == "dark"
@@ -358,6 +479,43 @@ def test_claude_home_visibility_merges_user_mcp_over_existing(tmp_path: Path) ->
     assert "user-only" in json.loads(source.read_text(encoding="utf-8"))["mcpServers"]
 
 
+def test_claude_home_visibility_uses_configured_mcp_key(tmp_path: Path) -> None:
+    source = tmp_path / ".claude.json"
+    source.write_text('{"customMcp": {"user": {"command": "user"}}}\n', encoding="utf-8")
+    state = tmp_path / "claude"
+
+    ClaudeHomeVisibility(state, tmp_path / ".claude", mcp_key="customMcp").apply()
+
+    document = json.loads((state / ".claude.json").read_text(encoding="utf-8"))
+    assert document == {"customMcp": {"user": {"command": "user"}}}
+
+
+def test_grok_home_visibility_merges_only_configured_extension_keys(tmp_path: Path) -> None:
+    user_home = tmp_path / "user-grok"
+    user_home.mkdir()
+    (user_home / "config.toml").write_text(
+        """
+[mcp_servers.hidden]
+command = "hidden"
+
+[custom_extensions.visible]
+command = "visible"
+""",
+        encoding="utf-8",
+    )
+    state_home = tmp_path / "state-grok"
+
+    GrokHomeVisibility(
+        state_home,
+        user_home,
+        extension_keys=("custom_extensions",),
+    ).apply()
+
+    document = tomlkit.parse((state_home / "config.toml").read_text(encoding="utf-8"))
+    assert document["custom_extensions"]["visible"]["command"] == "visible"
+    assert "mcp_servers" not in document
+
+
 def test_claude_home_visibility_ignores_invalid_json(tmp_path: Path, caplog) -> None:
     source = tmp_path / ".claude.json"
     source.write_text("{not-json", encoding="utf-8")
@@ -367,7 +525,7 @@ def test_claude_home_visibility_ignores_invalid_json(tmp_path: Path, caplog) -> 
     target.write_text('{"mcpServers": {"keep": {}}}\n', encoding="utf-8")
 
     with caplog.at_level(logging.WARNING, logger="ccs_plus.home_visibility"):
-        ClaudeHomeVisibility(state, tmp_path / ".claude").apply()
+        ClaudeHomeVisibility(state, tmp_path / ".claude", mcp_key="mcpServers").apply()
 
     assert "Skipping Claude MCP source" in caplog.text
     assert json.loads(target.read_text(encoding="utf-8")) == {"mcpServers": {"keep": {}}}
@@ -382,7 +540,7 @@ def test_claude_home_visibility_ignores_invalid_target(tmp_path: Path, caplog) -
     target.write_text("{broken", encoding="utf-8")
 
     with caplog.at_level(logging.WARNING, logger="ccs_plus.home_visibility"):
-        ClaudeHomeVisibility(state, tmp_path / ".claude").apply()
+        ClaudeHomeVisibility(state, tmp_path / ".claude", mcp_key="mcpServers").apply()
 
     assert "Skipping Claude MCP target" in caplog.text
     assert target.read_text(encoding="utf-8") == "{broken"

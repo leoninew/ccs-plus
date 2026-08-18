@@ -6,9 +6,7 @@ import tomlkit
 from ccs_plus.adapters import build_provider, runtime_from_provider
 from ccs_plus.domain import AppKind, CodexAppConfig, CodexRuntime, NewProvider, ProviderError
 from ccs_plus.home_visibility import CodexHomeVisibility
-from ccs_plus.managed_config import (
-    ensure_managed_config as _ensure_managed_config,
-)
+from ccs_plus.managed_config import ensure_managed_config as _ensure_managed_config
 from ccs_plus.managed_config import remove_managed_config
 
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
@@ -21,6 +19,12 @@ def ensure_managed_config(*args, **kwargs):
         kwargs["visibility"] = CodexHomeVisibility(
             state_home=args[1],
             user_home=user_home,
+            profile_extension_keys=(
+                "mcp_servers",
+                "plugins",
+                "marketplaces",
+                "shell_environment_policy",
+            ),
             project_directory=project_directory,
         )
     return _ensure_managed_config(
@@ -279,6 +283,111 @@ command = "second"
     ensure_managed_config(runtime, tmp_path, None, None, user_home=user_home)
     document = tomlkit.parse(path.read_text(encoding="utf-8"))
     assert document["mcp_servers"]["one"]["command"] == "second"
+    assert not path.with_suffix(path.suffix + ".ccs-plus.bak").exists()
+
+
+def test_codex_profile_preserves_existing_extensions_and_merges_sources(tmp_path) -> None:
+    runtime = _runtime(AppKind.CODEX)
+    profile = ensure_managed_config(runtime, tmp_path, None, None)
+    path = tmp_path / f"{profile.name}.config.toml"
+    path.write_text(
+        f"""# ccs-plus-managed: codex:{runtime.provider.id}
+[mcp_servers.profile-only]
+command = "profile"
+
+[mcp_servers.shared]
+command = "profile"
+
+[plugins."profile@local"]
+enabled = true
+
+[plugins."shared@local"]
+enabled = true
+
+[marketplaces.profile-local]
+source = "profile"
+
+[marketplaces.shared-local]
+source = "profile"
+
+[shell_environment_policy]
+exclude = ["PROFILE"]
+inherit = "profile"
+""",
+        encoding="utf-8",
+    )
+    (tmp_path / "config.toml").write_text(
+        """
+[mcp_servers.state-only]
+command = "state"
+
+[mcp_servers.shared]
+command = "state"
+
+[plugins."state@local"]
+enabled = true
+
+[plugins."shared@local"]
+enabled = false
+
+[marketplaces.state-local]
+source = "state"
+
+[marketplaces.shared-local]
+source = "state"
+
+[shell_environment_policy]
+include = ["STATE"]
+inherit = "state"
+""",
+        encoding="utf-8",
+    )
+    user_home = tmp_path / "user-codex"
+    user_home.mkdir()
+    (user_home / "config.toml").write_text(
+        """
+[mcp_servers.user-only]
+command = "user"
+
+[mcp_servers.shared]
+command = "user"
+
+[plugins."user@local"]
+enabled = true
+
+[plugins."shared@local"]
+enabled = true
+
+[marketplaces.user-local]
+source = "user"
+
+[marketplaces.shared-local]
+source = "user"
+
+[shell_environment_policy]
+inherit = "user"
+""",
+        encoding="utf-8",
+    )
+
+    ensure_managed_config(runtime, tmp_path, None, None, user_home=user_home)
+    document = tomlkit.parse(path.read_text(encoding="utf-8"))
+
+    assert document["mcp_servers"]["profile-only"]["command"] == "profile"
+    assert document["mcp_servers"]["state-only"]["command"] == "state"
+    assert document["mcp_servers"]["user-only"]["command"] == "user"
+    assert document["mcp_servers"]["shared"]["command"] == "user"
+    assert document["plugins"]["profile@local"]["enabled"] is True
+    assert document["plugins"]["state@local"]["enabled"] is True
+    assert document["plugins"]["user@local"]["enabled"] is True
+    assert document["plugins"]["shared@local"]["enabled"] is True
+    assert document["marketplaces"]["profile-local"]["source"] == "profile"
+    assert document["marketplaces"]["state-local"]["source"] == "state"
+    assert document["marketplaces"]["user-local"]["source"] == "user"
+    assert document["marketplaces"]["shared-local"]["source"] == "user"
+    assert list(document["shell_environment_policy"]["exclude"]) == ["PROFILE"]
+    assert list(document["shell_environment_policy"]["include"]) == ["STATE"]
+    assert document["shell_environment_policy"]["inherit"] == "user"
 
 
 def test_codex_profile_preserves_projects_when_merging_user_tables(tmp_path) -> None:
@@ -306,6 +415,33 @@ command = "demo"
     document = tomlkit.parse(path.read_text(encoding="utf-8"))
     assert document["projects"][r"d:\workspace"]["trust_level"] == "trusted"
     assert document["mcp_servers"]["demo"]["command"] == "demo"
+
+
+def test_codex_profile_preserves_only_visibility_configured_extensions(tmp_path) -> None:
+    runtime = _runtime(AppKind.CODEX)
+    visibility = CodexHomeVisibility(
+        state_home=tmp_path,
+        user_home=None,
+        profile_extension_keys=("custom_extensions",),
+    )
+    profile = ensure_managed_config(runtime, tmp_path, None, None, visibility=visibility)
+    path = tmp_path / f"{profile.name}.config.toml"
+    path.write_text(
+        f"""# ccs-plus-managed: codex:{runtime.provider.id}
+[custom_extensions.keep]
+command = "keep"
+
+[mcp_servers.drop]
+command = "drop"
+""",
+        encoding="utf-8",
+    )
+
+    ensure_managed_config(runtime, tmp_path, None, None, visibility=visibility)
+    document = tomlkit.parse(path.read_text(encoding="utf-8"))
+
+    assert document["custom_extensions"]["keep"]["command"] == "keep"
+    assert "mcp_servers" not in document
 
 
 def test_codex_profile_ignores_invalid_user_config(tmp_path, caplog) -> None:
@@ -391,7 +527,7 @@ context_window = 500000
     assert document["models"]["default_reasoning_effort"] == "xhigh"
     assert document["model"][profile.name]["model"] == "example-model"
     assert document["model"][profile.name]["context_window"] == 500_000
-    assert (tmp_path / "config.toml.ccs-plus.bak").is_file()
+    assert not (tmp_path / "config.toml.ccs-plus.bak").exists()
 
 
 def test_grok_config_keeps_only_current_managed_model(tmp_path) -> None:

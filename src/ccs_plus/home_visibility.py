@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from collections.abc import Collection, Mapping, MutableMapping
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
@@ -18,11 +18,9 @@ import tomlkit
 from tomlkit import TOMLDocument
 
 from ccs_plus.domain import ClaudeRuntime, CodexRuntime, GrokRuntime, ProviderError, RuntimeConfig
-from ccs_plus.settings import AppSettings
+from ccs_plus.settings import AppSettings, EntryVisibilitySettings
 
 logger = logging.getLogger(__name__)
-
-CLAUDE_MCP_KEY = "mcpServers"
 
 
 @dataclass(frozen=True)
@@ -31,6 +29,7 @@ class HomeVisibility:
 
     state_home: Path
     user_home: Path | None
+    profile_extension_keys: tuple[str, ...] = ()
 
     def apply(self) -> None:
         raise NotImplementedError
@@ -49,18 +48,24 @@ class DisabledHomeVisibility(HomeVisibility):
 
 @dataclass(frozen=True)
 class ClaudeHomeVisibility(HomeVisibility):
-    plugin_copy_names: Collection[str] = ()
-    plugin_skip_names: Collection[str] = ()
+    mcp_key: str = ""
+    skills: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
+    plugins: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
 
     def apply(self) -> None:
         if self.user_home is None:
             return
-        link_user_entries(self.user_home / "skills", self.state_home / "skills")
+        link_user_entries(
+            self.user_home / "skills",
+            self.state_home / "skills",
+            skip_names=self.skills.skip_names,
+            copy_names=self.skills.copy_names,
+        )
         link_user_entries(
             self.user_home / "plugins",
             self.state_home / "plugins",
-            skip_names=self.plugin_skip_names,
-            copy_names=self.plugin_copy_names,
+            skip_names=self.plugins.skip_names,
+            copy_names=self.plugins.copy_names,
         )
         self._merge_mcp_servers(self.user_home.parent / ".claude.json")
 
@@ -68,7 +73,7 @@ class ClaudeHomeVisibility(HomeVisibility):
         source_document = _read_json_object(source, "Claude MCP source")
         if source_document is None:
             return
-        user_servers = _mapping_or_empty(source_document.get(CLAUDE_MCP_KEY), source)
+        user_servers = _mapping_or_empty(source_document.get(self.mcp_key), source)
         if user_servers is None:
             return
 
@@ -78,14 +83,14 @@ class ClaudeHomeVisibility(HomeVisibility):
         )
         if existing_document is None:
             return
-        existing_servers = _mapping_or_empty(existing_document.get(CLAUDE_MCP_KEY), target)
+        existing_servers = _mapping_or_empty(existing_document.get(self.mcp_key), target)
         if existing_servers is None:
             return
         merged_servers = {**existing_servers, **user_servers}
-        if merged_servers == existing_servers and CLAUDE_MCP_KEY in existing_document:
+        if merged_servers == existing_servers and self.mcp_key in existing_document:
             return
         output = dict(existing_document)
-        output[CLAUDE_MCP_KEY] = merged_servers
+        output[self.mcp_key] = merged_servers
         try:
             _write_json_atomic(target, output)
         except OSError as exc:
@@ -96,6 +101,8 @@ class ClaudeHomeVisibility(HomeVisibility):
 class CodexHomeVisibility(HomeVisibility):
     is_official: bool = False
     project_directory: Path | None = None
+    skills: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
+    plugins: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
 
     def apply(self) -> None:
         if self.user_home is None:
@@ -104,12 +111,14 @@ class CodexHomeVisibility(HomeVisibility):
         link_user_entries(
             self.user_home / "skills",
             self.state_home / "skills",
-            skip_names={".system"},
+            skip_names=self.skills.skip_names,
+            copy_names=self.skills.copy_names,
         )
         link_user_entries(
             self.user_home / "plugins",
             self.state_home / "plugins",
-            skip_names={".plugin-appserver", ".remote-plugin-install-staging"},
+            skip_names=self.plugins.skip_names,
+            copy_names=self.plugins.copy_names,
         )
         if self.is_official:
             self._merge_into_state()
@@ -139,49 +148,106 @@ class CodexHomeVisibility(HomeVisibility):
             if self.user_home is not None
             else None
         )
-        _merge_named_table(document, "mcp_servers", state_document, user_document)
-        if user_document is None:
-            return
-        for key in ("plugins", "marketplaces", "shell_environment_policy"):
-            if key in user_document:
-                document[key] = deepcopy(user_document[key])
-        _merge_current_project_trust(document, user_document, self.project_directory)
+        for key in self.profile_extension_keys:
+            _merge_named_table(document, key, document, state_document, user_document)
+        if user_document is not None:
+            _merge_current_project_trust(document, user_document, self.project_directory)
+        self._warn_unregistered_plugin_caches(document)
 
     def _merge_into_state(self) -> None:
         if self.user_home is None:
             return
         user_document = _read_toml(self.user_home / "config.toml", "Codex user")
         if user_document is None:
+            self._warn_unregistered_plugin_caches(
+                _read_toml(self.state_home / "config.toml", "Codex state") or tomlkit.document()
+            )
             return
         path = self.state_home / "config.toml"
         with _toml_lock(path):
             document = _read_toml(path, "Codex state") if path.exists() else tomlkit.document()
             if document is None:
                 return
-            _merge_named_table(document, "mcp_servers", document, user_document)
-            for key in ("plugins", "marketplaces", "shell_environment_policy"):
-                if key in user_document:
-                    document[key] = deepcopy(user_document[key])
+            for key in self.profile_extension_keys:
+                _merge_named_table(document, key, document, user_document)
             _merge_current_project_trust(document, user_document, self.project_directory)
             _write_toml_atomic(path, document)
+
+    def _warn_unregistered_plugin_caches(self, document: TOMLDocument) -> None:
+        if self.user_home is None:
+            return
+        plugins = document.get("plugins")
+        registered = (
+            {
+                name
+                for name, settings in plugins.items()
+                if isinstance(name, str)
+                and isinstance(settings, Mapping)
+                and settings.get("enabled") is not False
+            }
+            if isinstance(plugins, Mapping)
+            else set()
+        )
+        cache = self.user_home / "plugins" / "cache"
+        try:
+            marketplaces = list(cache.iterdir()) if cache.is_dir() else []
+        except OSError as exc:
+            logger.warning("Failed to scan Codex plugin cache %s: %s", cache, exc)
+            return
+        for marketplace in marketplaces:
+            if not marketplace.is_dir():
+                continue
+            try:
+                plugin_dirs = list(marketplace.iterdir())
+            except OSError as exc:
+                logger.warning("Failed to scan Codex plugin cache %s: %s", marketplace, exc)
+                continue
+            for plugin_dir in plugin_dirs:
+                if not plugin_dir.is_dir():
+                    continue
+                plugin_id = f"{plugin_dir.name}@{marketplace.name}"
+                if plugin_id not in registered:
+                    logger.warning(
+                        "Codex plugin cache %s has no visible enabled plugin registration; "
+                        "leaving it inactive.",
+                        plugin_id,
+                    )
 
 
 @dataclass(frozen=True)
 class GrokHomeVisibility(HomeVisibility):
+    extension_keys: tuple[str, ...] = ()
+    skills: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
+    plugins: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
+    hooks: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
+    installed_plugins: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
+
     def apply(self) -> None:
         if self.user_home is None or _path_key(self.state_home) == _path_key(self.user_home):
             return
-        link_user_entries(self.user_home / "skills", self.state_home / "skills")
-        link_user_entries(self.user_home / "plugins", self.state_home / "plugins")
+        link_user_entries(
+            self.user_home / "skills",
+            self.state_home / "skills",
+            skip_names=self.skills.skip_names,
+            copy_names=self.skills.copy_names,
+        )
+        link_user_entries(
+            self.user_home / "plugins",
+            self.state_home / "plugins",
+            skip_names=self.plugins.skip_names,
+            copy_names=self.plugins.copy_names,
+        )
         link_user_entries(
             self.user_home / "hooks",
             self.state_home / "hooks",
-            copy_names={"orca-status.json"},
+            skip_names=self.hooks.skip_names,
+            copy_names=self.hooks.copy_names,
         )
         link_user_entries(
             self.user_home / "installed-plugins",
             self.state_home / "installed-plugins",
-            copy_names={"registry.json"},
+            skip_names=self.installed_plugins.skip_names,
+            copy_names=self.installed_plugins.copy_names,
         )
         self._merge_user_config()
 
@@ -196,10 +262,8 @@ class GrokHomeVisibility(HomeVisibility):
             document = _read_toml(path, "Grok state") if path.exists() else tomlkit.document()
             if document is None:
                 return
-            _merge_named_table(document, "mcp_servers", document, user_document)
-            for key in ("skills", "plugins", "marketplace", "hooks"):
-                if key in user_document:
-                    document[key] = deepcopy(user_document[key])
+            for key in self.extension_keys:
+                _merge_named_table(document, key, document, user_document)
             _write_toml_atomic(path, document)
 
 
@@ -213,23 +277,44 @@ def home_visibility_for(
 ) -> HomeVisibility:
     """Build the visibility policy matching *runtime*."""
     if not enabled:
-        return DisabledHomeVisibility(state_home=state_home, user_home=None)
+        profile_extension_keys = (
+            settings.codex.visibility.profile_extension_keys
+            if isinstance(runtime, CodexRuntime)
+            else ()
+        )
+        return DisabledHomeVisibility(
+            state_home=state_home,
+            user_home=None,
+            profile_extension_keys=profile_extension_keys,
+        )
     if isinstance(runtime, ClaudeRuntime):
         return ClaudeHomeVisibility(
             state_home=state_home,
             user_home=settings.claude.user_home,
-            plugin_copy_names=settings.claude.plugin_copy_names,
-            plugin_skip_names=settings.claude.plugin_skip_names,
+            mcp_key=settings.claude.visibility.mcp_key,
+            skills=settings.claude.visibility.skills,
+            plugins=settings.claude.visibility.plugins,
         )
     if isinstance(runtime, CodexRuntime):
         return CodexHomeVisibility(
             state_home=state_home,
             user_home=settings.codex.user_home,
+            profile_extension_keys=settings.codex.visibility.profile_extension_keys,
             is_official=runtime.provider.is_official,
             project_directory=project_directory,
+            skills=settings.codex.visibility.skills,
+            plugins=settings.codex.visibility.plugins,
         )
     if isinstance(runtime, GrokRuntime):
-        return GrokHomeVisibility(state_home=state_home, user_home=settings.grok.user_home)
+        return GrokHomeVisibility(
+            state_home=state_home,
+            user_home=settings.grok.user_home,
+            extension_keys=settings.grok.visibility.extension_keys,
+            skills=settings.grok.visibility.skills,
+            plugins=settings.grok.visibility.plugins,
+            hooks=settings.grok.visibility.hooks,
+            installed_plugins=settings.grok.visibility.installed_plugins,
+        )
     raise ProviderError(f"Unsupported home visibility runtime: {type(runtime).__name__}.")
 
 

@@ -42,6 +42,7 @@ class CodexSessionReader(SessionReader):
         CodexHomeVisibility(
             settings.codex.home,
             settings.codex.user_home,
+            profile_extension_keys=settings.codex.visibility.profile_extension_keys,
         ).expose_sessions()
 
     def list(self, home: Path, app: AppKind) -> list[Session]:

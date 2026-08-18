@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import tempfile
 from collections.abc import Mapping, MutableMapping
 from copy import deepcopy
@@ -76,6 +75,11 @@ class CodexManagedConfig(ManagedConfig):
                 projects = existing.get("projects")
                 if isinstance(projects, Mapping):
                     document["projects"] = deepcopy(projects)
+                if self.visibility is not None:
+                    for key in self.visibility.profile_extension_keys:
+                        value = existing.get(key)
+                        if isinstance(value, Mapping):
+                            document[key] = deepcopy(value)
             providers = tomlkit.table()
             provider = tomlkit.table()
             provider["name"] = self.runtime.provider.name
@@ -89,7 +93,7 @@ class CodexManagedConfig(ManagedConfig):
             document["model_providers"] = providers
             if self.visibility is not None:
                 self.visibility.merge_into(document)
-            _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
+            _write_atomic(path, tomlkit.dumps(document), locked=True)
         return ManagedProfile(name=profile, env_key=env_key)
 
     @staticmethod
@@ -178,7 +182,7 @@ class GrokManagedConfig(ManagedConfig):
             target["api_backend"] = "responses"
             target["context_window"] = 500_000
             model_tables[profile] = target
-            _write_atomic(path, tomlkit.dumps(document), locked=True, backup=path.exists())
+            _write_atomic(path, tomlkit.dumps(document), locked=True)
         return ManagedProfile(name=profile, env_key=env_key)
 
     @classmethod
@@ -301,18 +305,16 @@ class _locked:
             self.lock.release()
 
 
-def _write_atomic(path: Path, content: str, locked: bool = False, backup: bool = False) -> None:
+def _write_atomic(path: Path, content: str, locked: bool = False) -> None:
     if locked:
-        _write(path, content, backup=backup)
+        _write(path, content)
         return
     with _locked(path):
-        _write(path, content, backup=backup)
+        _write(path, content)
 
 
-def _write(path: Path, content: str, backup: bool = False) -> None:
+def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if backup and path.exists():
-        shutil.copy2(path, path.with_suffix(path.suffix + ".ccs-plus.bak"))
     file_descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=path.parent, text=True
     )

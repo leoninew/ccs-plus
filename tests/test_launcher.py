@@ -751,11 +751,28 @@ def test_launch_from_user_home_disables_home_visibility(
     user_home = user_homes[app]
     assert user_home is not None
     (user_home / "skills" / "shared-skill").mkdir(parents=True)
+    if app is AppKind.CODEX or app is AppKind.GROK:
+        (user_home / "config.toml").write_text(
+            """
+[mcp_servers.user-only]
+command = "user"
+""",
+            encoding="utf-8",
+        )
 
-    build_launch_spec(_provider(app), settings, tmp_path)
+    spec = build_launch_spec(_provider(app), settings, tmp_path)
 
     state_home = settings.state_home(app.value)
     assert not (state_home / "skills" / "shared-skill").exists()
+    if app is AppKind.CODEX:
+        profile = spec.argv[spec.argv.index("--profile") + 1]
+        document = tomlkit.parse(
+            (state_home / f"{profile}.config.toml").read_text(encoding="utf-8")
+        )
+        assert "mcp_servers" not in document
+    elif app is AppKind.GROK:
+        document = tomlkit.parse((state_home / "config.toml").read_text(encoding="utf-8"))
+        assert "mcp_servers" not in document
 
 
 def test_user_home_detection_does_not_match_descendant_projects(tmp_path) -> None:
@@ -764,6 +781,17 @@ def test_user_home_detection_does_not_match_descendant_projects(tmp_path) -> Non
 
     assert _is_user_home_directory(tmp_path, user_home=tmp_path)
     assert not _is_user_home_directory(project, user_home=tmp_path)
+
+
+@pytest.mark.parametrize("app", AppKind)
+def test_launch_preserves_project_working_directory(tmp_path, monkeypatch, app: AppKind) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-cli")
+    project = tmp_path / "project"
+    (project / ".agents" / "skills" / "project-skill").mkdir(parents=True)
+
+    spec = build_launch_spec(_provider(app), make_app_settings(tmp_path), project)
+
+    assert spec.cwd == project.resolve()
 
 
 def test_launch_logs_argv_and_exit_code_without_environment(monkeypatch, tmp_path, caplog) -> None:

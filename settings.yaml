@@ -22,25 +22,53 @@ apps:
   claude:
     home: data/claude
     permission_mode: bypassPermissions
-    # Plugin entries shared into the isolated state home. Directories are always
-    # linked (junctions); these names control files only. "copy" files are copied
-    # from the real home on each launch (their contents point back there by
-    # absolute path, so a copy needs no symlink privilege); "skip" files are left
-    # to the isolated run (regenerable cache).
-    plugins:
-      copy:
-        - .last_inuse_sweep
-        - blocklist.json
-        - installed_plugins.json
-        - known_marketplaces.json
-      skip:
-        - plugin-catalog-cache.json
+    visibility:
+      # User-home extension policy for the isolated runtime. Directories are
+      # linked entry-by-entry; named files can instead be copied or skipped.
+      mcp_key: mcpServers
+      skills: {}
+      plugins:
+        copy:
+          - .last_inuse_sweep
+          - blocklist.json
+          - installed_plugins.json
+          - known_marketplaces.json
+        skip:
+          - plugin-catalog-cache.json
   codex:
     home: data/codex
     session_model_provider: ccs-plus-managed
     approval_policy: never
     sandbox_mode: danger-full-access
+    visibility:
+      profile_extension_keys:
+        - mcp_servers
+        - plugins
+        - marketplaces
+        - shell_environment_policy
+      skills:
+        skip:
+          - .system
+      plugins:
+        skip:
+          - .plugin-appserver
+          - .remote-plugin-install-staging
   grok:
     home: data/grok
     sandbox_mode: workspace
     always_approve: true
+    visibility:
+      extension_keys:
+        - mcp_servers
+        - skills
+        - plugins
+        - marketplace
+        - hooks
+      skills: {}
+      plugins: {}
+      hooks:
+        copy:
+          - orca-status.json
+      installed_plugins:
+        copy:
+          - registry.json

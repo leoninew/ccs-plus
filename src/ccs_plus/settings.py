@@ -22,12 +22,11 @@ class AppHomeSettings:
 
 
 @dataclass(frozen=True)
-class ClaudeSettings:
-    home: Path
-    permission_mode: str
-    user_home: Path | None = None
-    plugin_copy_names: frozenset[str] = frozenset()
-    plugin_skip_names: frozenset[str] = frozenset()
+class EntryVisibilitySettings:
+    """How one user-home extension directory is projected into a runtime home."""
+
+    copy_names: tuple[str, ...] = ()
+    skip_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -35,6 +34,7 @@ class GrokSettings:
     home: Path
     sandbox_mode: str
     always_approve: bool
+    visibility: GrokVisibilitySettings
     user_home: Path | None = None
 
 
@@ -45,12 +45,44 @@ class CodexSettings:
     session_model_provider: str
     approval_policy: str
     sandbox_mode: str
+    visibility: CodexVisibilitySettings
 
     def provider_defaults(self) -> CodexAppConfig:
         return CodexAppConfig(
             approval_policy=self.approval_policy,
             sandbox_mode=self.sandbox_mode,
         )
+
+
+@dataclass(frozen=True)
+class ClaudeVisibilitySettings:
+    mcp_key: str
+    skills: EntryVisibilitySettings
+    plugins: EntryVisibilitySettings
+
+
+@dataclass(frozen=True)
+class CodexVisibilitySettings:
+    profile_extension_keys: tuple[str, ...]
+    skills: EntryVisibilitySettings
+    plugins: EntryVisibilitySettings
+
+
+@dataclass(frozen=True)
+class GrokVisibilitySettings:
+    extension_keys: tuple[str, ...]
+    skills: EntryVisibilitySettings
+    plugins: EntryVisibilitySettings
+    hooks: EntryVisibilitySettings
+    installed_plugins: EntryVisibilitySettings
+
+
+@dataclass(frozen=True)
+class ClaudeSettings:
+    home: Path
+    permission_mode: str
+    visibility: ClaudeVisibilitySettings
+    user_home: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -116,18 +148,31 @@ def _resolve_non_empty_string(value: object, key: str) -> str:
     return value.strip()
 
 
-def _resolve_name_set(value: object, key: str) -> frozenset[str]:
-    """Parse a list of names into a set; absent or empty yields ``frozenset()``."""
+def _resolve_name_list(value: object, key: str, *, required: bool = False) -> tuple[str, ...]:
+    """Parse a configured list of entry or table names, preserving its order."""
     if value is None:
-        return frozenset()
+        if required:
+            raise ProviderError(f"Configuration {key} must be a non-empty list of names.")
+        return ()
     if not isinstance(value, (list, tuple, set, frozenset)):
         raise ProviderError(f"Configuration {key} must be a list of names.")
-    names: set[str] = set()
+    names: list[str] = []
     for item in value:
         if not isinstance(item, str) or not item.strip():
             raise ProviderError(f"Configuration {key} entries must be non-empty strings.")
-        names.add(item.strip())
-    return frozenset(names)
+        name = item.strip()
+        if name not in names:
+            names.append(name)
+    if required and not names:
+        raise ProviderError(f"Configuration {key} must be a non-empty list of names.")
+    return tuple(names)
+
+
+def _resolve_entry_visibility(config: Dynaconf, key: str) -> EntryVisibilitySettings:
+    return EntryVisibilitySettings(
+        copy_names=_resolve_name_list(_get(config, f"{key}.copy"), f"{key}.copy"),
+        skip_names=_resolve_name_list(_get(config, f"{key}.skip"), f"{key}.skip"),
+    )
 
 
 def _resolve_proxy(value: object) -> str:
@@ -185,13 +230,13 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
                 _get(config, "apps.claude.permission_mode"),
                 "apps.claude.permission_mode",
             ),
-            plugin_copy_names=_resolve_name_set(
-                _get(config, "apps.claude.plugins.copy"),
-                "apps.claude.plugins.copy",
-            ),
-            plugin_skip_names=_resolve_name_set(
-                _get(config, "apps.claude.plugins.skip"),
-                "apps.claude.plugins.skip",
+            visibility=ClaudeVisibilitySettings(
+                mcp_key=_resolve_non_empty_string(
+                    _get(config, "apps.claude.visibility.mcp_key"),
+                    "apps.claude.visibility.mcp_key",
+                ),
+                skills=_resolve_entry_visibility(config, "apps.claude.visibility.skills"),
+                plugins=_resolve_entry_visibility(config, "apps.claude.visibility.plugins"),
             ),
         ),
         codex=CodexSettings(
@@ -214,6 +259,15 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
                 _get(config, "apps.codex.sandbox_mode"),
                 "apps.codex.sandbox_mode",
             ),
+            visibility=CodexVisibilitySettings(
+                profile_extension_keys=_resolve_name_list(
+                    _get(config, "apps.codex.visibility.profile_extension_keys"),
+                    "apps.codex.visibility.profile_extension_keys",
+                    required=True,
+                ),
+                skills=_resolve_entry_visibility(config, "apps.codex.visibility.skills"),
+                plugins=_resolve_entry_visibility(config, "apps.codex.visibility.plugins"),
+            ),
         ),
         grok=GrokSettings(
             home=_resolve_path(root, _get(config, "apps.grok.home"), "apps.grok.home"),
@@ -230,6 +284,20 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
             always_approve=_resolve_bool(
                 _get(config, "apps.grok.always_approve"),
                 "apps.grok.always_approve",
+            ),
+            visibility=GrokVisibilitySettings(
+                extension_keys=_resolve_name_list(
+                    _get(config, "apps.grok.visibility.extension_keys"),
+                    "apps.grok.visibility.extension_keys",
+                    required=True,
+                ),
+                skills=_resolve_entry_visibility(config, "apps.grok.visibility.skills"),
+                plugins=_resolve_entry_visibility(config, "apps.grok.visibility.plugins"),
+                hooks=_resolve_entry_visibility(config, "apps.grok.visibility.hooks"),
+                installed_plugins=_resolve_entry_visibility(
+                    config,
+                    "apps.grok.visibility.installed_plugins",
+                ),
             ),
         ),
     )

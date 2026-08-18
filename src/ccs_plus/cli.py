@@ -32,6 +32,7 @@ RUN_APP_PREFIXES = {
 }
 RUN_PREFIXES = {app: prefix for prefix, app in RUN_APP_PREFIXES.items()}
 RUN_SELECTOR = re.compile(r"(?P<app>[cxg])(?P<number>[1-9][0-9]*)", re.IGNORECASE)
+APP_NAMES = frozenset(app.value for app in AppKind)
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,36 @@ def _repository() -> ProviderRepository:
 
 def _app(value: str) -> AppKind:
     return AppKind.from_cli_value(value)
+
+
+def _selected_apps(app_name: str | None) -> list[AppKind]:
+    return [_app(app_name)] if app_name else list(AppKind)
+
+
+def _parse_provider_data_arguments(
+    arguments: tuple[str, ...],
+    *,
+    command: str,
+    path_label: str,
+    path_required: bool,
+) -> tuple[list[AppKind], Path | None]:
+    """Parse ``[app] [path]`` while retaining export's legacy path-only form."""
+    path_name = path_label.replace(" ", "-")
+    path_usage = f"<{path_name}>" if path_required else f"[{path_name}]"
+    usage = f"Usage: ccs-plus providers {command} [claude|codex|grok] {path_usage}"
+    if len(arguments) > 2:
+        raise click.UsageError(usage)
+
+    app_name = arguments[0] if arguments and arguments[0] in APP_NAMES else None
+    path_index = 1 if app_name else 0
+    path = Path(arguments[path_index]) if len(arguments) > path_index else None
+
+    if len(arguments) > path_index + 1:
+        raise click.UsageError(usage)
+    if path_required and path is None:
+        raise click.UsageError(f"Missing {path_label}.")
+
+    return _selected_apps(app_name), path
 
 
 @click.group(
@@ -136,12 +167,18 @@ def add_provider(
 
 
 @providers.command("export", context_settings=HELP_CONTEXT_SETTINGS)
-@click.argument("output_path", type=click.Path(path_type=Path, dir_okay=False), required=False)
-def export_providers(output_path: Path | None) -> None:
-    """Write custom providers to an encrypted JSON backup."""
+@click.argument("arguments", nargs=-1)
+def export_providers(arguments: tuple[str, ...]) -> None:
+    """Write custom providers to a backup: export [app] [output-path]."""
     try:
-        output_path = output_path or _default_backup_path()
-        document = build_backup_document(_repository().list_stored(), _encryption_key())
+        apps, output_path = _parse_provider_data_arguments(
+            arguments,
+            command="export",
+            path_label="output path",
+            path_required=False,
+        )
+        output_path = output_path or _default_backup_path(apps)
+        document = build_backup_document(_repository().list_stored(apps), _encryption_key())
         _write_backup(output_path, document)
         records = document["providers"]
         assert isinstance(records, list)
@@ -151,14 +188,22 @@ def export_providers(output_path: Path | None) -> None:
 
 
 @providers.command("import", context_settings=HELP_CONTEXT_SETTINGS)
-@click.argument("input_path", type=click.Path(path_type=Path, dir_okay=False, exists=True))
-def import_providers(input_path: Path) -> None:
-    """Read an encrypted JSON backup and add every validated provider."""
+@click.argument("arguments", nargs=-1)
+def import_providers(arguments: tuple[str, ...]) -> None:
+    """Read a backup: import [app] <input-path>."""
     try:
+        apps, input_path = _parse_provider_data_arguments(
+            arguments,
+            command="import",
+            path_label="input path",
+            path_required=True,
+        )
+        assert input_path is not None
         document = _read_backup(input_path)
         values = parse_backup_document(document, _encryption_key())
+        values = [value for value in values if value.app in apps]
         repository = _repository()
-        _validate_import_names(values, repository.list())
+        _validate_import_names(values, repository.list(apps))
         codex = _settings().codex.provider_defaults()
         repository.add_many(build_provider(value, codex) for value in values)
         click.echo(f"Imported {len(values)} custom providers from {input_path}.")
@@ -167,18 +212,18 @@ def import_providers(input_path: Path) -> None:
 
 
 @providers.command("reset", context_settings=HELP_CONTEXT_SETTINGS)
-@click.argument("app_name", type=click.Choice([item.value for item in AppKind]))
+@click.argument("app_name", type=click.Choice([item.value for item in AppKind]), required=False)
 @click.option(
     "--no-dry-run",
     is_flag=True,
     help="Delete all non-official providers instead of previewing the reset.",
 )
-def reset_providers(app_name: str, no_dry_run: bool) -> None:
-    """Preview or delete non-official providers for one app."""
+def reset_providers(app_name: str | None, no_dry_run: bool) -> None:
+    """Preview or delete non-official providers for all apps or one app."""
     try:
-        app = _app(app_name)
+        apps = _selected_apps(app_name)
         repository = _repository()
-        targets = [provider for provider in repository.list([app]) if not provider.is_official]
+        targets = [provider for provider in repository.list(apps) if not provider.is_official]
         if not no_dry_run:
             count = len(targets)
             noun = "provider" if count == 1 else "providers"
@@ -186,12 +231,11 @@ def reset_providers(app_name: str, no_dry_run: bool) -> None:
             for provider in targets:
                 click.echo(f"- {provider.app.value}/{provider.name}")
             return
-        deleted = repository.reset_non_official([app])
-        if app.has_managed_profile_files:
-            codex_home = _settings().codex.home
-            for provider in targets:
-                if provider.app.has_managed_profile_files:
-                    remove_managed_config(codex_home, provider.id)
+        deleted = repository.reset_non_official(apps)
+        codex_home = _settings().codex.home
+        for provider in targets:
+            if provider.app.has_managed_profile_files:
+                remove_managed_config(codex_home, provider.id)
         click.echo(f"Deleted {deleted} non-official providers.")
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -361,9 +405,10 @@ def _encryption_key() -> str:
     return _settings().encryption_key
 
 
-def _default_backup_path() -> Path:
+def _default_backup_path(apps: list[AppKind]) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = _settings().project_root / "data" / f"providers-{timestamp}.json"
+    scope = apps[0].value if len(apps) == 1 else "all"
+    path = _settings().project_root / "data" / f"providers-{scope}-{timestamp}.json"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
