@@ -14,7 +14,8 @@ make release
 # 或：pip install -e .
 ```
 
-`make release` 将项目以 editable 方式安装。安装完成后使用 `ccs-plus` 执行命令。
+`make release` 将项目以 editable 方式安装。安装完成后可使用 `ccs-plus` 或其别名
+`ccsp` 执行命令。
 
 ## 配置
 
@@ -38,36 +39,37 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 ```powershell
 # 交互式选择 Agent、provider 和工作目录
-ccs-plus
+ccsp
 
-# 查看 provider
-ccs-plus providers list
-ccs-plus providers list --app codex --json
+# 查看 provider（p 是 provider 的短用法）
+ccsp p list
+ccsp p list --app codex --json
 
 # 新增 provider
-ccs-plus providers add claude `
+ccsp p add claude `
   --name "<provider-name>" `
   --endpoint "https://api.example.com/v1" `
   --model "<model-id>"
 
 # 按列表编号启动 provider，例如 x2 表示第二个 Codex provider
-ccs-plus run x2
+ccsp r x2
 
 # 从指定目录启动
-ccs-plus launch codex --provider "<provider-name>" --cwd "C:\work\project"
+ccsp l codex --provider "<provider-name>" --cwd "C:\work\project"
 
 # 备份、恢复与重置：省略 app 时同时处理 Claude、Codex、Grok
-ccs-plus providers export # data/providers-all-<timestamp>.json
-ccs-plus providers export codex # data/providers-codex-<timestamp>.json
-ccs-plus providers export codex "data/codex-providers.json"
-ccs-plus providers import "data/providers-all-<timestamp>.json"
-ccs-plus providers import codex "data/codex-providers.json"
-ccs-plus providers reset
-ccs-plus providers reset codex --no-dry-run
-ccs-plus providers delete claude "<provider-name>" --yes
+ccsp p export # data/providers-all-<timestamp>.json
+ccsp p export codex # data/providers-codex-<timestamp>.json
+ccsp p export codex "data/codex-providers.json"
+ccsp p import "data/providers-all-<timestamp>.json"
+ccsp p import codex "data/codex-providers.json"
+ccsp p reset
+ccsp p reset codex --no-dry-run
+ccsp p delete claude "<provider-name>" --yes
 ```
 
-使用 `ccs-plus --help` 或任一子命令的 `--help` 查看完整参数。`providers show` 会输出
+使用 `ccsp --help` 或任一子命令的 `--help` 查看完整参数。`p`、`l`、`r` 分别是
+`provider`、`launch`、`run` 的短用法；`p show` 会输出
 API Key，只应在可信终端使用。
 
 ## 开发

@@ -1,5 +1,5 @@
 # 受管启动的用户与项目扩展可见性
-最后修改时间: 2026-08-18 18:22:34
+最后修改时间: 2026-08-18 18:58:47
 
 Review status: Accepted
 
@@ -72,6 +72,7 @@ profile/state 仍有效扩展项的保留规则。缓存仍不是 enablement 的
 - 受管配置写入保持锁与原子替换，但不生成旁路 `.ccs-plus.bak` 文件。
 - provider 的导出、导入与重置均支持 `claude`、`codex`、`grok` 作为可选前置；未指定
   app 时在各操作原有的过滤边界内同时处理三端数据。
+- 安装包保留 `ccs-plus` 主命令，同时提供等价的 `ccsp` 短别名。
 
 ## Non-goal
 
@@ -97,8 +98,8 @@ profile/state 仍有效扩展项的保留规则。缓存仍不是 enablement 的
    但 provider 隔离和正常启动保持可用。
 6. 若 cache 中存在插件但 user Home 没有其安装注册，启动结果可诊断，且不会在未授权
    情况下自动将缓存视为启用插件。
-7. 用户可执行 `providers export codex`、`providers import codex <file>` 或
-   `providers reset codex --no-dry-run` 仅维护一个 app；省略 app 时三条命令均处理三端。
+7. 用户可执行 `provider export codex`、`provider import codex <file>` 或
+   `provider reset codex --no-dry-run` 仅维护一个 app；省略 app 时三条命令均处理三端。
 
 ## Acceptance
 
@@ -114,9 +115,14 @@ profile/state 仍有效扩展项的保留规则。缓存仍不是 enablement 的
   从 user Home 启动的测试证明这些 visibility 行为不执行。
 - 当插件仅存 cache、未在 user Home 注册时，行为与诊断有测试覆盖；不隐式改变用户
   配置。
-- `providers export`、`providers import`、`providers reset` 可选接受 app 前置；缺省与
+- `provider export`、`provider import`、`provider reset` 可选接受 app 前置；缺省与
   显式 `claude`、`codex`、`grok` 的三端并集等效。限定导入仍须完整验证备份后才过滤目标
   app，限定 reset 继续只删除非官方 provider。
+- CLI 的 provider 管理命令组固定为单数 `provider`，不保留 `providers` 子命令别名；备份
+  文件名和备份 JSON 的 `providers` 数据字段不受此命令命名约束影响。
+- 顶层 `launch`、`provider`、`run` 分别提供 `l`、`p`、`r` 短用法，且每一对共用同一
+  命令参数和执行逻辑。
+- `ccs-plus` 与 `ccsp` 安装后指向同一个 CLI 入口，并保留相同的命令语义。
 - 相关单元测试、项目 lint、类型检查和定向测试通过。
 
 ## Open questions
@@ -150,6 +156,8 @@ profile/state 仍有效扩展项的保留规则。缓存仍不是 enablement 的
   `import <input-path>` 形式；首个参数是 app 名称时按 app 处理。自动生成的 export
   文件名必须包含 app scope：未给 app 时为 `providers-all-<timestamp>.json`，给 app 时为
   `providers-<app>-<timestamp>.json`。
+- 发行元数据将 `ccsp` 映射到与 `ccs-plus` 相同的 `ccs_plus.cli:main` 入口，不引入
+  第二个 CLI 实现或改变输出中的主产品名称。
 
 ## Risk
 

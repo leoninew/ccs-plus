@@ -1,5 +1,5 @@
 # 受管启动的用户与项目扩展可见性验证
-最后修改时间: 2026-08-18 18:24:41
+最后修改时间: 2026-08-18 18:59:26
 
 Review status: Draft
 
@@ -19,6 +19,7 @@ Review status: Draft
 - provider 的 `export`、`import`、`reset` 均支持可选 app 前置；省略 app 时分别在
   原有的 custom-provider / non-official-provider 过滤边界内同时处理 Claude、Codex、Grok。
 - export 未给 output path 时，备份文件名以 `all` 或显式 app 标明实际数据范围。
+- 打包后保留 `ccs-plus`，并可用 `ccsp` 作为等价短命令。
 
 ## Plan Alignment
 
@@ -36,6 +37,9 @@ provider 数据维护统一以 app-first 方式限定单端，并保留既有路
 path 的 export 分别生成 `providers-all-<timestamp>.json` 与
 `providers-<app>-<timestamp>.json`。
 
+`pyproject.toml` 将 `ccsp` 映射到主命令的同一 Click 入口，不增加第二套命令实现；README
+在安装说明中明确两个命令均可使用。
+
 ## Actual Diff
 
 | 范围 | 实际变更 |
@@ -46,6 +50,9 @@ path 的 export 分别生成 `providers-all-<timestamp>.json` 与
 | 同步脚本 | `best-practices/sync.sh`、`housekeeper/sync.sh` 不继承受管 Home；Grok 的 list/update/install 均通过 user-home 包装。 |
 | 文档与测试 | 合并历史 SpecFlow 文档、补充 `.env.example`，并覆盖配置解析、三端 visibility、profile 重建、user-Home 禁用与 sync 调用边界。README 保持用户使用、开发、测试和贡献说明。 |
 | Provider 数据命令 | export/import/reset 接受可选 `claude`、`codex`、`grok` 前置；默认统一操作三端，单端 import 在全量备份校验后过滤，自动 export 文件名包含 app scope。 |
+| Provider CLI 命名 | 统一使用单数 `provider` 命令组；`providers` 不再作为子命令可用，备份字段和文件名维持复数。 |
+| 顶层命令短用法 | `l`、`p`、`r` 分别复用 `launch`、`provider`、`run` 的同一 Click 命令对象。 |
+| CLI 别名 | 保留 `ccs-plus` 主命令，并注册指向相同入口的 `ccsp`。 |
 
 实际变更与 Requirement/Plan 一致；未发现超出范围的生产行为变更。旧 SpecFlow 文档的删除
 由新 Requirement、Plan 和本 Verification 统一承接，未发现指向被删除文档的 Markdown 链接。
@@ -62,6 +69,9 @@ path 的 export 分别生成 `providers-all-<timestamp>.json` 与
 - [x] provider export/import/reset 缺省时覆盖三端，显式 Codex 时只操作 Codex。
 - [x] 限定 import 不会绕过完整备份校验，reset 的 Codex profile 清理仍只处理删除目标。
 - [x] export 默认文件名在全端时包含 `all`，单端时包含显式 app。
+- [x] `provider` 是唯一的 provider 管理命令组，`providers` 会报未知命令。
+- [x] `l`、`p`、`r` 分别与 `launch`、`provider`、`run` 使用同一命令对象。
+- [x] `ccsp --help` 与 `ccs-plus --help` 均可用，命令面一致。
 
 ## Test Results
 
@@ -70,8 +80,10 @@ path 的 export 分别生成 `providers-all-<timestamp>.json` 与
 | `uv run ruff format --check .` | 通过，87 files already formatted |
 | `uv run ruff check src tests` | 通过 |
 | `uv run mypy src` | 通过，14 source files 无问题 |
-| `uv run pytest tests` | 通过，170 passed、1 skipped |
-| `uv run ccs-plus providers {export,import,reset} --help` | 通过，三条命令均展示 app 可选语义 |
+| `uv run pytest tests` | 通过，172 passed、1 skipped |
+| `uv run ccsp provider {export,import,reset} --help` | 通过，三条命令均展示 app 可选语义 |
+| `uv run ccsp {l,p,r} --help` | 通过，三个短用法分别展示原命令的参数和子命令 |
+| `uv run ccs-plus --help`、`uv run ccsp --help` | 通过，均暴露 launch/provider/run 命令 |
 | `bash -n`（两个 `sync.sh`） | 通过 |
 | 旧 SpecFlow 链接检查 | 通过，未发现指向已删除文档的 Markdown 链接 |
 

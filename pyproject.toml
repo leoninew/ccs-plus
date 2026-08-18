@@ -25,6 +25,7 @@ dev = [
 
 [project.scripts]
 ccs-plus = "ccs_plus.cli:main"
+ccsp = "ccs_plus.cli:main"
 
 [build-system]
 requires = ["hatchling>=1.27"]

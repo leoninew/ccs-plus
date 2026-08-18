@@ -1,5 +1,5 @@
 # 受管启动的用户与项目扩展可见性计划
-最后修改时间: 2026-08-18 18:22:34
+最后修改时间: 2026-08-18 18:58:47
 
 Review status: Accepted
 
@@ -80,7 +80,7 @@ provider 隔离 runtime home。
 
 ### Provider 数据维护范围
 
-`providers export`、`providers import` 与 `providers reset` 共享可选 app 前置，app
+`provider export`、`provider import` 与 `provider reset` 共享可选 app 前置，app
 集合为 `claude`、`codex`、`grok`；省略时统一传入 `list(AppKind)`，使三条命令都在其
 既有业务边界内操作全部 app。export 保持已有的 `export <output-path>` 兼容形式，并增加
 `export <app> [output-path]`；import 使用 `import <app> <input-path>`。限定 import 必须
@@ -89,6 +89,17 @@ reset 的 dry-run 与实际删除均使用同一 app 集合，仍只删除非官
 Codex 目标继续清理对应的 managed profile。未提供 output path 的 export 按 scope 生成
 `providers-all-<timestamp>.json` 或 `providers-<app>-<timestamp>.json`，避免三端和单端
 备份在 `data/` 中语义不明。
+
+Click 命令组使用单数 `provider`，所有子命令、usage 文本、README 和测试随之统一；不提供
+`providers` 兼容别名，避免两种命令面并存。
+
+顶层 `launch`、`provider`、`run` 同时注册 `l`、`p`、`r` 作为指向同一 Click 命令对象的
+短用法，确保参数、帮助和执行逻辑不会分叉。
+
+### CLI 别名
+
+保留 `ccs-plus` 为主 console script，并在项目发行元数据中将 `ccsp` 映射到相同的
+`ccs_plus.cli:main`。README 仅说明二者等价；不改写生成的 provider shortcut 或 TUI 品牌。
 
 ## Implementation Steps
 
@@ -153,6 +164,18 @@ Codex 目标继续清理对应的 managed profile。未提供 output path 的 ex
    - 添加默认三端、限定单端、导入全量校验顺序的 CLI 回归测试，并在 README 使用区展示
      全端和 Codex 限定示例，以及对应的自动文件名。
 
+9. **提供短命令别名**
+   - 在 `[project.scripts]` 为 `ccsp` 注册与 `ccs-plus` 相同的 CLI 入口。
+   - 验证两者的 `--help` 命令面一致，并更新 README 安装说明。
+
+10. **统一 provider 管理命令组名称**
+   - 将 Click 分组和所有使用示例从 `providers` 改为 `provider`。
+   - 保留备份格式与自动文件名的 `providers` 复数语义，并回归验证旧命令不可用。
+
+11. **提供顶层命令短用法**
+   - 为 `launch`、`provider`、`run` 分别注册 `l`、`p`、`r`。
+   - 通过同一 Click 命令对象实现别名，并覆盖帮助与对象映射回归。
+
 ## Files to Change
 
 | 文件 | 计划变更 |
@@ -164,6 +187,7 @@ Codex 目标继续清理对应的 managed profile。未提供 output path 的 ex
 | `tests/test_managed_config.py` | Codex profile repeated-ensure、profile/state/user 覆盖与 provider 隔离测试。 |
 | `tests/test_launcher.py` | 三端项目 cwd、project-level facility 与 user-Home 启动回归测试。 |
 | `README.md` | 运行时隔离和扩展可见性行为说明。 |
+| `pyproject.toml` | 注册 `ccsp` console-script 别名。 |
 | `src/ccs_plus/cli.py` | provider export/import/reset 的可选 app 前置与全端默认选择。 |
 | `tests/test_cli.py` | provider 数据维护的全端默认、单端限定和完整备份校验回归。 |
 | `../best-practices/sync.sh` | 向真实 user home 同步，并以 native Windows 路径注册 Codex/Grok 本地插件。 |
@@ -189,6 +213,7 @@ Codex 目标继续清理对应的 managed profile。未提供 output path 的 ex
 - CLI：验证 `export`、`import`、`reset` 省略 app 时选中三端，显式 Codex 时只操作 Codex；
   验证带无效非目标记录的备份不会因限定导入而绕过完整性校验；验证 export 默认文件名
   包含 `all` 或目标 app。
+- 打包：验证 `ccs-plus --help` 与 `ccsp --help` 均可运行并暴露同一命令面。
 - 工程：根据项目入口运行 lint、类型检查、格式和完整测试；检查 README 与删除文档的
   链接不存在悬挂引用。
 

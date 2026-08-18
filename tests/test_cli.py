@@ -40,7 +40,7 @@ def _settings(tmp_path, **overrides) -> AppSettings:
 def test_help_exposes_provider_and_launch_commands() -> None:
     result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
-    assert "providers" in result.output
+    assert "  provider" in result.output
     assert "launch" in result.output
     assert "run" in result.output
 
@@ -49,16 +49,20 @@ def test_short_help_option_matches_long_help_for_every_command() -> None:
     runner = CliRunner()
     commands = (
         (),
-        ("providers",),
-        ("providers", "list"),
-        ("providers", "add"),
-        ("providers", "export"),
-        ("providers", "import"),
-        ("providers", "reset"),
-        ("providers", "show"),
-        ("providers", "delete"),
+        ("provider",),
+        ("p",),
+        ("provider", "list"),
+        ("p", "list"),
+        ("provider", "add"),
+        ("provider", "export"),
+        ("provider", "import"),
+        ("provider", "reset"),
+        ("provider", "show"),
+        ("provider", "delete"),
         ("launch",),
+        ("l",),
         ("run",),
+        ("r",),
     )
     for command in commands:
         short_help = runner.invoke(main, [*command, "-h"])
@@ -66,6 +70,19 @@ def test_short_help_option_matches_long_help_for_every_command() -> None:
 
         assert short_help.exit_code == long_help.exit_code == 0
         assert short_help.output == long_help.output
+
+
+def test_short_commands_alias_their_primary_commands() -> None:
+    assert main.commands["p"] is main.commands["provider"]
+    assert main.commands["l"] is main.commands["launch"]
+    assert main.commands["r"] is main.commands["run"]
+
+
+def test_plural_provider_command_is_not_available() -> None:
+    result = CliRunner().invoke(main, ["providers", "--help"])
+
+    assert result.exit_code != 0
+    assert "No such command 'providers'" in result.output
 
 
 def test_launch_help_makes_cwd_optional() -> None:
@@ -342,7 +359,7 @@ def test_provider_list_json_does_not_expose_api_key(monkeypatch) -> None:
             return [provider]
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
-    result = CliRunner().invoke(main, ["providers", "list", "--json"])
+    result = CliRunner().invoke(main, ["provider", "list", "--json"])
     assert result.exit_code == 0
     assert provider.id not in result.output
     assert "cli-secret-key" not in result.output
@@ -370,7 +387,7 @@ def test_provider_list_numbers_each_app_from_one(monkeypatch) -> None:
             return records
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
-    result = CliRunner().invoke(main, ["providers", "list", "--json"])
+    result = CliRunner().invoke(main, ["provider", "list", "--json"])
 
     assert result.exit_code == 0
     assert [record["shortcut"] for record in json.loads(result.output)] == [
@@ -389,7 +406,7 @@ def test_provider_list_renders_alias_after_name_without_shortcut_column(monkeypa
             return [provider]
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
-    result = CliRunner().invoke(main, ["providers", "list"])
+    result = CliRunner().invoke(main, ["provider", "list"])
 
     assert result.exit_code == 0
     assert "Alias" in result.output
@@ -417,7 +434,7 @@ def test_provider_list_falls_back_to_endpoint_candidates(monkeypatch) -> None:
             return [provider]
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
-    result = CliRunner().invoke(main, ["providers", "list", "--json"])
+    result = CliRunner().invoke(main, ["provider", "list", "--json"])
 
     assert result.exit_code == 0
     assert "https://candidate.example.test/v1" in result.output
@@ -435,7 +452,7 @@ def test_provider_add_does_not_echo_api_key(monkeypatch, tmp_path) -> None:
     result = CliRunner().invoke(
         main,
         [
-            "providers",
+            "provider",
             "add",
             "codex",
             "--name",
@@ -472,7 +489,7 @@ def test_provider_add_grok_writes_default_reasoning_effort(monkeypatch, tmp_path
     result = CliRunner().invoke(
         main,
         [
-            "providers",
+            "provider",
             "add",
             "grok",
             "--name",
@@ -508,7 +525,7 @@ def test_provider_export_writes_default_encrypted_backup(monkeypatch, tmp_path) 
         "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
     )
 
-    result = CliRunner().invoke(main, ["providers", "export"])
+    result = CliRunner().invoke(main, ["provider", "export"])
 
     assert result.exit_code == 0
     assert "Exported 1 custom providers" in result.output
@@ -533,7 +550,7 @@ def test_provider_export_preserves_stored_provider_order(monkeypatch, tmp_path) 
         "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
     )
 
-    result = CliRunner().invoke(main, ["providers", "export", str(output_path)])
+    result = CliRunner().invoke(main, ["provider", "export", str(output_path)])
 
     assert result.exit_code == 0
     document = json.loads(output_path.read_text(encoding="utf-8"))
@@ -554,7 +571,7 @@ def test_provider_export_limits_backup_to_selected_app(monkeypatch, tmp_path) ->
         "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
     )
 
-    result = CliRunner().invoke(main, ["providers", "export", "codex", str(output_path)])
+    result = CliRunner().invoke(main, ["provider", "export", "codex", str(output_path)])
 
     assert result.exit_code == 0
     document = json.loads(output_path.read_text(encoding="utf-8"))
@@ -576,7 +593,7 @@ def test_provider_export_uses_app_name_in_default_backup_filename(monkeypatch, t
         "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
     )
 
-    result = CliRunner().invoke(main, ["providers", "export", "codex"])
+    result = CliRunner().invoke(main, ["provider", "export", "codex"])
 
     assert result.exit_code == 0
     assert len(list((tmp_path / "data").glob("providers-codex-*.json"))) == 1
@@ -607,7 +624,7 @@ def test_provider_import_validates_complete_backup_before_filtering(monkeypatch,
         "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
     )
 
-    result = CliRunner().invoke(main, ["providers", "import", "codex", str(input_path)])
+    result = CliRunner().invoke(main, ["provider", "import", "codex", str(input_path)])
 
     assert result.exit_code != 0
     assert "Endpoint must be an absolute http or https URL" in result.output
@@ -640,7 +657,7 @@ def test_provider_import_adds_all_validated_providers(monkeypatch, tmp_path) -> 
         "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
     )
 
-    result = CliRunner().invoke(main, ["providers", "import", str(input_path)])
+    result = CliRunner().invoke(main, ["provider", "import", str(input_path)])
 
     assert result.exit_code == 0
     assert "Imported 1 custom providers" in result.output
@@ -676,7 +693,7 @@ def test_provider_import_limits_records_to_selected_app(monkeypatch, tmp_path) -
         "ccs_plus.cli._encryption_key", lambda: "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
     )
 
-    result = CliRunner().invoke(main, ["providers", "import", "codex", str(input_path)])
+    result = CliRunner().invoke(main, ["provider", "import", "codex", str(input_path)])
 
     assert result.exit_code == 0
     assert "Imported 1 custom providers" in result.output
@@ -698,7 +715,7 @@ def test_provider_reset_defaults_to_dry_run(monkeypatch) -> None:
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
 
-    result = CliRunner().invoke(main, ["providers", "reset"])
+    result = CliRunner().invoke(main, ["provider", "reset"])
 
     assert result.exit_code == 0
     assert "would delete 1 non-official provider" in result.output
@@ -719,7 +736,7 @@ def test_provider_reset_deletes_all_non_official_providers_by_default(monkeypatc
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
 
-    result = CliRunner().invoke(main, ["providers", "reset", "--no-dry-run"])
+    result = CliRunner().invoke(main, ["provider", "reset", "--no-dry-run"])
 
     assert result.exit_code == 0
     assert deleted == [list(AppKind)]
@@ -748,7 +765,7 @@ def test_provider_reset_removes_deleted_codex_profiles(monkeypatch, tmp_path) ->
         lambda home, provider_id: removed.append((home, provider_id)),
     )
 
-    result = CliRunner().invoke(main, ["providers", "reset", "codex", "--no-dry-run"])
+    result = CliRunner().invoke(main, ["provider", "reset", "codex", "--no-dry-run"])
 
     assert result.exit_code == 0
     assert removed == [(settings.codex.home, codex.id)]
@@ -763,7 +780,7 @@ def test_provider_show_includes_unredacted_key_configuration(monkeypatch) -> Non
             return [provider]
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
-    result = CliRunner().invoke(main, ["providers", "show", provider.name])
+    result = CliRunner().invoke(main, ["provider", "show", provider.name])
 
     assert result.exit_code == 0
     assert "cli-secret-key" in result.output
@@ -777,7 +794,7 @@ def test_provider_show_includes_unredacted_key_configuration(monkeypatch) -> Non
 
 
 def test_provider_delete_requires_confirmation() -> None:
-    result = CliRunner().invoke(main, ["providers", "delete", "claude", "example"])
+    result = CliRunner().invoke(main, ["provider", "delete", "claude", "example"])
     assert result.exit_code != 0
     assert "--yes" in result.output
 
@@ -805,7 +822,7 @@ def test_provider_delete_uses_the_requested_app_and_id(monkeypatch) -> None:
             deleted.append((app, provider_id))
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
-    result = CliRunner().invoke(main, ["providers", "delete", "grok", "Example Provider", "--yes"])
+    result = CliRunner().invoke(main, ["provider", "delete", "grok", "Example Provider", "--yes"])
 
     assert result.exit_code == 0
     assert deleted == [(AppKind.GROK, "grok-provider-id")]
@@ -835,7 +852,7 @@ def test_provider_delete_removes_codex_profile(monkeypatch, tmp_path) -> None:
 
     result = CliRunner().invoke(
         main,
-        ["providers", "delete", "codex", provider.name, "--yes"],
+        ["provider", "delete", "codex", provider.name, "--yes"],
     )
 
     assert result.exit_code == 0

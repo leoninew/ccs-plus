@@ -75,7 +75,7 @@ def _parse_provider_data_arguments(
     """Parse ``[app] [path]`` while retaining export's legacy path-only form."""
     path_name = path_label.replace(" ", "-")
     path_usage = f"<{path_name}>" if path_required else f"[{path_name}]"
-    usage = f"Usage: ccs-plus providers {command} [claude|codex|grok] {path_usage}"
+    usage = f"Usage: ccsp provider {command} [claude|codex|grok] {path_usage}"
     if len(arguments) > 2:
         raise click.UsageError(usage)
 
@@ -101,12 +101,12 @@ def main(ctx: click.Context) -> None:
         _interactive_launch()
 
 
-@main.group(context_settings=HELP_CONTEXT_SETTINGS)
-def providers() -> None:
+@main.group("provider", context_settings=HELP_CONTEXT_SETTINGS)
+def provider() -> None:
     """List, add, export, import, reset, and delete cc-switch providers."""
 
 
-@providers.command("list", context_settings=HELP_CONTEXT_SETTINGS)
+@provider.command("list", context_settings=HELP_CONTEXT_SETTINGS)
 @click.option("--app", "app_name", type=click.Choice([item.value for item in AppKind]))
 @click.option("--json", "as_json", is_flag=True, help="Emit provider metadata as JSON.")
 def list_providers(app_name: str | None, as_json: bool) -> None:
@@ -128,7 +128,7 @@ def list_providers(app_name: str | None, as_json: bool) -> None:
         raise click.ClickException(str(exc)) from exc
 
 
-@providers.command("add", context_settings=HELP_CONTEXT_SETTINGS)
+@provider.command("add", context_settings=HELP_CONTEXT_SETTINGS)
 @click.argument("app_name", type=click.Choice([item.value for item in AppKind]))
 @click.option("--name", required=True, help="Provider display name.")
 @click.option("--endpoint", required=True, help="Exact provider base URL.")
@@ -166,7 +166,7 @@ def add_provider(
         raise click.ClickException(str(exc)) from exc
 
 
-@providers.command("export", context_settings=HELP_CONTEXT_SETTINGS)
+@provider.command("export", context_settings=HELP_CONTEXT_SETTINGS)
 @click.argument("arguments", nargs=-1)
 def export_providers(arguments: tuple[str, ...]) -> None:
     """Write custom providers to a backup: export [app] [output-path]."""
@@ -187,7 +187,7 @@ def export_providers(arguments: tuple[str, ...]) -> None:
         raise click.ClickException(str(exc)) from exc
 
 
-@providers.command("import", context_settings=HELP_CONTEXT_SETTINGS)
+@provider.command("import", context_settings=HELP_CONTEXT_SETTINGS)
 @click.argument("arguments", nargs=-1)
 def import_providers(arguments: tuple[str, ...]) -> None:
     """Read a backup: import [app] <input-path>."""
@@ -211,7 +211,7 @@ def import_providers(arguments: tuple[str, ...]) -> None:
         raise click.ClickException(str(exc)) from exc
 
 
-@providers.command("reset", context_settings=HELP_CONTEXT_SETTINGS)
+@provider.command("reset", context_settings=HELP_CONTEXT_SETTINGS)
 @click.argument("app_name", type=click.Choice([item.value for item in AppKind]), required=False)
 @click.option(
     "--no-dry-run",
@@ -241,7 +241,7 @@ def reset_providers(app_name: str | None, no_dry_run: bool) -> None:
         raise click.ClickException(str(exc)) from exc
 
 
-@providers.command("show", context_settings=HELP_CONTEXT_SETTINGS)
+@provider.command("show", context_settings=HELP_CONTEXT_SETTINGS)
 @click.argument("name")
 def show_provider(name: str) -> None:
     """Show key configuration for every exact provider-name match."""
@@ -257,7 +257,7 @@ def show_provider(name: str) -> None:
         raise click.ClickException(str(exc)) from exc
 
 
-@providers.command("delete", context_settings=HELP_CONTEXT_SETTINGS)
+@provider.command("delete", context_settings=HELP_CONTEXT_SETTINGS)
 @click.argument("app_name", type=click.Choice([item.value for item in AppKind]))
 @click.argument("name")
 @click.option("--yes", is_flag=True, help="Confirm permanent database deletion.")
@@ -331,6 +331,11 @@ def run_provider(target: str, verbose: bool) -> None:
             raise click.exceptions.Exit(exit_code)
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+main.add_command(provider, "p")
+main.add_command(launch_provider, "l")
+main.add_command(run_provider, "r")
 
 
 def _interactive_launch() -> None:
@@ -471,7 +476,7 @@ def _provider_at_number(app: AppKind, number: int, entries: list[ProviderListEnt
             return entry.provider
     raise ProviderError(
         f"Provider number {number} does not exist for {app.value}. "
-        f"Run 'ccs-plus providers list --app {app.value}' to see available providers."
+        f"Run 'ccsp provider list --app {app.value}' to see available providers."
     )
 
 
