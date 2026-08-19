@@ -133,26 +133,28 @@ def test_launcher_keeps_provider_permissions_without_explicit_override(tmp_path:
     assert plan.sandbox_mode is None
 
 
-def test_launcher_resume_selects_session(tmp_path: Path) -> None:
+def _write_codex_session(
+    settings,
+    *,
+    session_id: str,
+    cwd: Path,
+    title: str,
+    stamp: str = "2026-08-13T12-00-00",
+) -> None:
     import json
 
-    provider = _provider(AppKind.CODEX, "Codex P")
-    settings = make_app_settings(tmp_path)
     day = settings.codex.user_home / "sessions" / "2026" / "08" / "13"
-    day.mkdir(parents=True)
-    session_cwd = tmp_path / "work"
-    session_cwd.mkdir()
-    sid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
-    (day / f"rollout-2026-08-13T12-00-00-{sid}.jsonl").write_text(
+    day.mkdir(parents=True, exist_ok=True)
+    (day / f"rollout-{stamp}-{session_id}.jsonl").write_text(
         "\n".join(
             [
                 json.dumps(
                     {
                         "type": "session_meta",
                         "payload": {
-                            "id": sid,
+                            "id": session_id,
                             "timestamp": "2026-08-13T04:00:00.000Z",
-                            "cwd": str(session_cwd),
+                            "cwd": str(cwd),
                         },
                     }
                 ),
@@ -161,7 +163,7 @@ def test_launcher_resume_selects_session(tmp_path: Path) -> None:
                         "type": "response_item",
                         "payload": {
                             "role": "user",
-                            "content": [{"type": "input_text", "text": "resume me"}],
+                            "content": [{"type": "input_text", "text": title}],
                         },
                     }
                 ),
@@ -170,9 +172,18 @@ def test_launcher_resume_selects_session(tmp_path: Path) -> None:
         + "\n",
         encoding="utf-8",
     )
+
+
+def test_launcher_resume_selects_session(tmp_path: Path) -> None:
+    provider = _provider(AppKind.CODEX, "Codex P")
+    settings = make_app_settings(tmp_path)
+    session_cwd = tmp_path / "work"
+    session_cwd.mkdir()
+    sid = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    _write_codex_session(settings, session_id=sid, cwd=session_cwd, title="resume me")
     history = LaunchHistory.load(tmp_path / "history.json")
+    # Nested under default_cwd still matches this-dir scope.
     # app → provider → dir → permissions → sessions → down (resume) → launch
-    # Directory pane hides after a session is selected; cwd comes from session.
     keys = "\r\r\r\r\x1b[B\r\r"
     plan = _drive(
         lambda: run_launcher(
@@ -188,3 +199,78 @@ def test_launcher_resume_selects_session(tmp_path: Path) -> None:
     assert plan.session is not None
     assert plan.session.session_id == sid
     assert plan.cwd == session_cwd.resolve()
+
+
+def test_launcher_this_dir_hides_foreign_sessions_until_all_scope(tmp_path: Path) -> None:
+    provider = _provider(AppKind.CODEX, "Codex P")
+    settings = make_app_settings(tmp_path)
+    local = tmp_path / "local"
+    foreign = tmp_path.parent / "foreign-project"
+    local.mkdir()
+    foreign.mkdir()
+    local_sid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    foreign_sid = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    _write_codex_session(
+        settings,
+        session_id=local_sid,
+        cwd=local,
+        title="local session",
+        stamp="2026-08-13T12-00-01",
+    )
+    _write_codex_session(
+        settings,
+        session_id=foreign_sid,
+        cwd=foreign,
+        title="foreign session",
+        stamp="2026-08-13T12-00-02",
+    )
+    history = LaunchHistory.load(tmp_path / "history.json")
+
+    # Default this-dir from local: only local session is listed (New + local).
+    # app → provider → dir → permissions → sessions → down → launch
+    local_plan = _drive(
+        lambda: run_launcher(
+            settings=settings,
+            providers=[provider],
+            history=history,
+            default_cwd=local,
+        ),
+        "\r\r\r\r\x1b[B\r\r",
+        delay=0.4,
+    )
+    assert local_plan is not None
+    assert local_plan.session is not None
+    assert local_plan.session.session_id == local_sid
+
+    # Press 'a' on sessions to show all projects. Newest foreign is listed first
+    # after New session, so one down selects it.
+    all_plan = _drive(
+        lambda: run_launcher(
+            settings=settings,
+            providers=[provider],
+            history=history,
+            default_cwd=local,
+        ),
+        "\r\r\r\ra\x1b[B\r\r",
+        delay=0.4,
+    )
+    assert all_plan is not None
+    assert all_plan.session is not None
+    assert all_plan.session.session_id == foreign_sid
+    assert all_plan.cwd == foreign.resolve()
+
+
+def test_session_matches_cwd_exact_and_nested(tmp_path: Path) -> None:
+    from ccs_plus.tui import _session_matches_cwd
+
+    root = tmp_path / "repo"
+    nested = root / "pkg"
+    other = tmp_path / "other"
+    root.mkdir()
+    nested.mkdir()
+    other.mkdir()
+
+    assert _session_matches_cwd(str(root), root)
+    assert _session_matches_cwd(str(nested), root)
+    assert not _session_matches_cwd(str(other), root)
+    assert not _session_matches_cwd("", root)

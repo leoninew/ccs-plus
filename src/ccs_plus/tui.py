@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.application.current import get_app
@@ -61,6 +62,12 @@ STYLE = Style.from_dict(
         "item.focused": "bg:#1f6feb #ffffff bold",
         "item.focused-sub": "bg:#1f6feb #dbeafe",
         "item.muted": "#8b949e",
+        "badge.claude": "bg:#d97706 #0a0e14 bold",
+        "badge.codex": "bg:#10b981 #0a0e14 bold",
+        "badge.grok": "bg:#a855f7 #0a0e14 bold",
+        "badge.claude.focused": "bg:#fbbf24 #0a0e14 bold",
+        "badge.codex.focused": "bg:#34d399 #0a0e14 bold",
+        "badge.grok.focused": "bg:#c084fc #0a0e14 bold",
         "status.ok": "#3fb950 bold",
         "status.err": "#ff7b72 bold",
         "button.launch": "bg:#238636 #ffffff bold",
@@ -75,6 +82,8 @@ STYLE = Style.from_dict(
 _SESSION_ROW = 2
 _PROVIDER_ROW = 2
 _PERMISSION_ROW = 2
+
+SessionScope = Literal["this_dir", "all"]
 
 
 @dataclass(frozen=True)
@@ -229,6 +238,38 @@ def _fuzzy_match(query: str, *parts: str) -> bool:
     return True
 
 
+def _normalize_cwd(path: str | Path) -> Path | None:
+    try:
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            candidate = (Path.cwd() / candidate).resolve()
+        else:
+            candidate = candidate.resolve()
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return candidate
+
+
+def _session_matches_cwd(session_cwd: str, scope_cwd: Path) -> bool:
+    """True when the session belongs to scope_cwd (exact or nested under it)."""
+    if not session_cwd:
+        return False
+    session_path = _normalize_cwd(session_cwd)
+    if session_path is None:
+        return False
+    try:
+        scope = scope_cwd.resolve()
+    except (OSError, RuntimeError):
+        scope = scope_cwd
+    if os.path.normcase(str(session_path)) == os.path.normcase(str(scope)):
+        return True
+    try:
+        session_path.relative_to(scope)
+        return True
+    except ValueError:
+        return False
+
+
 class _LaunchScreen:
     """Single-screen launcher: config (left) | sessions (right)."""
 
@@ -267,6 +308,8 @@ class _LaunchScreen:
         self.provider_filter = ""
         self.session_filter = ""
         self.filter_mode = False
+        # Default: only sessions for the launch/working directory (like native CLIs).
+        self.sessions_scope: SessionScope = "this_dir"
 
         self.dir_area = TextArea(
             text=str(default_cwd),
@@ -385,23 +428,48 @@ class _LaunchScreen:
         if self._filtered_sessions_cache is not None:
             return self._filtered_sessions_cache
         sessions = self.all_sessions
+        if self.sessions_scope == "this_dir":
+            scope_cwd = self._session_scope_cwd()
+            sessions = [
+                session for session in sessions if _session_matches_cwd(session.cwd, scope_cwd)
+            ]
         query = self.session_filter
-        if not query:
-            self._filtered_sessions_cache = sessions
-            return sessions
-        result = [
-            session
-            for session in sessions
-            if _fuzzy_match(query, session.title, session.cwd, session.session_id)
-        ]
-        self._filtered_sessions_cache = result
-        return result
+        if query:
+            sessions = [
+                session
+                for session in sessions
+                if _fuzzy_match(query, session.title, session.cwd, session.session_id)
+            ]
+        self._filtered_sessions_cache = sessions
+        return sessions
+
+    def _session_scope_cwd(self) -> Path:
+        """Directory used for the 'this dir' session scope.
+
+        Prefer a valid path from the directory field while creating a new
+        session; otherwise fall back to the launcher's default cwd.
+        """
+        if self.selected_session is None:
+            text = self.dir_buffer.text.strip()
+            if text:
+                path = Path(text).expanduser()
+                path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
+                if path.is_dir():
+                    return path
+        return self.default_cwd
 
     def _invalidate_provider_filter(self) -> None:
         self._filtered_providers_cache = None
 
     def _invalidate_session_filter(self) -> None:
         self._filtered_sessions_cache = None
+
+    def _toggle_sessions_scope(self) -> None:
+        self.sessions_scope = "all" if self.sessions_scope == "this_dir" else "this_dir"
+        self._invalidate_session_filter()
+        self.session_index = 0
+        self._session_scroll = 0
+        self._clamp_session_index()
 
     @property
     def selected_session(self) -> Session | None:
@@ -468,6 +536,9 @@ class _LaunchScreen:
         if self.dir_buffer.text == text:
             return
         self.dir_buffer.set_document(Document(text, len(text)), bypass_readonly=True)
+        if self.sessions_scope == "this_dir":
+            self._invalidate_session_filter()
+            self._clamp_session_index()
 
     def _focus_order(self) -> list[str]:
         order = ["app", "provider"]
@@ -482,19 +553,27 @@ class _LaunchScreen:
         order = self._focus_order()
         if pane not in order:
             pane = order[0]
+        previous = self.focus
         if pane not in {"provider", "sessions"}:
             self.filter_mode = False
         self.focus = pane
+        if previous == "dir" and pane != "dir" and self.sessions_scope == "this_dir":
+            self._invalidate_session_filter()
+            self._clamp_session_index()
         self._sync_layout_focus()
 
     def _move_focus(self, delta: int) -> None:
         self.filter_mode = False
         order = self._focus_order()
+        previous = self.focus
         if self.focus not in order:
             self.focus = order[0]
         else:
             index = order.index(self.focus)
             self.focus = order[(index + delta) % len(order)]
+        if previous == "dir" and self.focus != "dir" and self.sessions_scope == "this_dir":
+            self._invalidate_session_filter()
+            self._clamp_session_index()
         self._sync_layout_focus()
 
     def _sync_layout_focus(self) -> None:
@@ -517,16 +596,18 @@ class _LaunchScreen:
             self.application.layout.focus(self._focus_sink)
 
     def _provider_capacity(self) -> int:
+        # Prefer live height; fall back to the configured preferred rows so the
+        # first paint after a layout change does not under-fill the pane.
         return max(
             1,
-            self._visible_lines(getattr(self, "_provider_window", None), default=8)
+            self._visible_lines(getattr(self, "_provider_window", None), default=10)
             // _PROVIDER_ROW,
         )
 
     def _session_capacity(self) -> int:
         return max(
             1,
-            self._visible_lines(getattr(self, "_sessions_window", None), default=16)
+            self._visible_lines(getattr(self, "_sessions_window", None), default=20)
             // _SESSION_ROW,
         )
 
@@ -539,6 +620,7 @@ class _LaunchScreen:
         elif self.provider_index >= self._provider_scroll + capacity:
             self._provider_scroll = self.provider_index - capacity + 1
         self._provider_scroll = max(0, min(self._provider_scroll, max_scroll))
+        self._apply_window_scroll()
 
     def _ensure_session_visible(self) -> None:
         count = self._session_entry_count()
@@ -549,6 +631,20 @@ class _LaunchScreen:
         elif self.session_index >= self._session_scroll + capacity:
             self._session_scroll = self.session_index - capacity + 1
         self._session_scroll = max(0, min(self._session_scroll, max_scroll))
+        self._apply_window_scroll()
+
+    def _apply_window_scroll(self) -> None:
+        """Drive Window.vertical_scroll from logical entry offsets.
+
+        Full lists are rendered; the Window clips. This avoids stale
+        content-windowing when sibling panes resize (e.g. directory hide).
+        """
+        provider_window = getattr(self, "_provider_window", None)
+        if provider_window is not None:
+            provider_window.vertical_scroll = self._provider_scroll * _PROVIDER_ROW
+        sessions_window = getattr(self, "_sessions_window", None)
+        if sessions_window is not None:
+            sessions_window.vertical_scroll = self._session_scroll * _SESSION_ROW
 
     def _visible_lines(self, window: Window | None, *, default: int) -> int:
         if window is None:
@@ -557,6 +653,11 @@ class _LaunchScreen:
         if info is None:
             return default
         return max(1, info.window_height)
+
+    def _resume_directory_text(self) -> StyleAndTextTuples:
+        session = self.selected_session
+        path = _short_path(session.cwd) if session and session.cwd else "—"
+        return [("class:item.muted", f" {path}\n")]
 
     def _clamp_provider_index(self) -> None:
         providers = self.filtered_providers
@@ -630,7 +731,7 @@ class _LaunchScreen:
     def _try_launch(self) -> None:
         provider = self.current_provider
         if provider is None:
-            self.status = f"No matching {self.current_app.value} providers."
+            self.status = f"No matching {self.current_app.display_name} providers."
             self.status_error = True
             return
         session = self.selected_session
@@ -669,11 +770,13 @@ class _LaunchScreen:
         provider = self.current_provider
         name = provider.name if provider else "—"
         mode = "resume" if self.selected_session else "new"
-        app = self.current_app.value
+        app = self.current_app
+        badge_style = f"class:badge.{app.style_key}"
         return [
             ("class:header.brand", " ccs-plus "),
             ("class:header", "▸ "),
-            ("class:header.accent", app),
+            (badge_style, f" {app.badge} "),
+            ("class:header.accent", f" {app.display_name}"),
             ("class:header", f" · {name} · "),
             ("class:header.mode", mode),
             ("class:header", " "),
@@ -693,6 +796,8 @@ class _LaunchScreen:
             ("class:footer", " · "),
             ("class:footer.key", "/"),
             ("class:footer", " filter · "),
+            ("class:footer.key", "a"),
+            ("class:footer", " scope · "),
             ("class:footer.key", "esc"),
             ("class:footer", " "),
         ]
@@ -717,10 +822,28 @@ class _LaunchScreen:
 
     def _pane_title_text(self, pane: str, label: str) -> str:
         filt = ""
-        if pane == "provider" and self.provider_filter:
-            filt = f" /{self.provider_filter}"
-        elif pane == "sessions" and self.session_filter:
-            filt = f" /{self.session_filter}"
+        if pane == "provider":
+            if self.provider_filter:
+                filt = f" /{self.provider_filter}"
+            total = len(self.filtered_providers)
+            capacity = self._provider_capacity()
+            if total > capacity:
+                start = self._provider_scroll + 1
+                end = min(total, self._provider_scroll + capacity)
+                filt += f" · {start}-{end}/{total}"
+        elif pane == "sessions":
+            scope = "this dir" if self.sessions_scope == "this_dir" else "all"
+            filt = f" · {scope}"
+            if self.session_filter:
+                filt += f" /{self.session_filter}"
+            total = self._session_entry_count()
+            capacity = self._session_capacity()
+            if total > capacity:
+                start = self._session_scroll + 1
+                end = min(total, self._session_scroll + capacity)
+                filt += f" · {start}-{end}/{total}"
+        elif pane == "dir" and self.selected_session is not None:
+            label = "session cwd"
         if self.focus == pane:
             suffix = " · filter" if self.filter_mode and pane in {"provider", "sessions"} else ""
             return f" ▶ {label}{filt}{suffix} "
@@ -836,29 +959,30 @@ class _LaunchScreen:
 
     def _session_lines(self) -> StyleAndTextTuples:
         lines: StyleAndTextTuples = []
-        entries: list[tuple[int, str, str]] = [(-1, "New session", "start fresh")]
+        scope_hint = (
+            f"in {_short_path(str(self._session_scope_cwd()))}"
+            if self.sessions_scope == "this_dir"
+            else "any project"
+        )
+        entries: list[tuple[int, str, str]] = [(-1, "New session", f"start fresh · {scope_hint}")]
         for index, session in enumerate(self.filtered_sessions):
             when = _relative_time(session.modified_at)
             subtitle = f"{_short_path(session.cwd)} · {when}" if session.cwd else when
             entries.append((index, session.title or session.session_id[:8], subtitle))
         if len(entries) == 1 and self.session_filter:
             entries.append((-2, "(no matches)", f"filter: {self.session_filter}"))
+        elif len(entries) == 1 and self.sessions_scope == "this_dir":
+            entries.append((-2, "(no sessions here)", "press a for all projects"))
         elif len(entries) == 1:
             entries.append((-2, "(no sessions)", "launch first to populate"))
 
-        # Windowed render only — prevents highlight overflow past the pane.
-        capacity = self._session_capacity()
-        start = max(0, min(self._session_scroll, max(0, len(entries) - 1)))
-        end = min(len(entries), start + capacity)
+        # Full list + Window.vertical_scroll (no content windowing) so sibling
+        # pane resize cannot leave the list under-filled for a frame.
         focused = self.focus == "sessions"
-        for row in range(start, end):
-            key, title, subtitle = entries[row]
+        for row, (key, title, subtitle) in enumerate(entries):
             selected = row == self.session_index if key != -2 else False
-            absolute = row  # already absolute index into entries
 
-            def handler(
-                mouse_event: MouseEvent, entry: int = absolute, selectable: int = key
-            ) -> object:
+            def handler(mouse_event: MouseEvent, entry: int = row, selectable: int = key) -> object:
                 if mouse_event.event_type != MouseEventType.MOUSE_DOWN:
                     return None
                 if selectable == -2:
@@ -878,14 +1002,6 @@ class _LaunchScreen:
                 subtitle=subtitle,
                 mouse_handler=handler,
             )
-        selectable = len([e for e in entries if e[0] != -2]) or len(entries)
-        if selectable > capacity:
-            lines.append(
-                (
-                    "class:frame.active.scroll" if focused else "class:frame.scroll",
-                    f"  ↕ {start + 1}-{end}/{selectable}\n",
-                )
-            )
         return lines
 
     def _app_lines(self) -> StyleAndTextTuples:
@@ -893,8 +1009,14 @@ class _LaunchScreen:
         focused = self.focus == "app"
         for index, app in enumerate(self.apps):
             selected = index == self.app_index
-            style = self._row_style(focused=focused and selected, selected=selected)
+            row_focused = focused and selected
+            style = self._row_style(focused=row_focused, selected=selected)
             marker = "● " if selected else "○ "
+            badge_style = (
+                f"class:badge.{app.style_key}.focused"
+                if row_focused
+                else f"class:badge.{app.style_key}"
+            )
 
             def handler(mouse_event: MouseEvent, entry: int = index) -> object:
                 if mouse_event.event_type != MouseEventType.MOUSE_DOWN:
@@ -905,7 +1027,13 @@ class _LaunchScreen:
                     get_app().invalidate()
                 return None
 
-            lines.append((style, f" {marker}{app.value}\n", handler))
+            lines.extend(
+                [
+                    (style, f" {marker}", handler),
+                    (badge_style, f" {app.badge} ", handler),
+                    (style, f" {app.display_name}\n", handler),
+                ]
+            )
         return lines
 
     def _provider_lines(self) -> StyleAndTextTuples:
@@ -921,11 +1049,7 @@ class _LaunchScreen:
             lines.append(("class:item.muted", f"  {msg}\n"))
             return lines
         default_id = self.history.default_provider_id(self.current_app, self.all_app_providers)
-        capacity = self._provider_capacity()
-        start = max(0, min(self._provider_scroll, max(0, len(providers) - 1)))
-        end = min(len(providers), start + capacity)
-        for index in range(start, end):
-            provider = providers[index]
+        for index, provider in enumerate(providers):
             selected = index == self.provider_index
             display = display_configuration(provider)
             model = display.model or "no model"
@@ -950,13 +1074,6 @@ class _LaunchScreen:
                 title=f"{provider.name}{mark}",
                 subtitle=f"{model} · {uses} use{'s' if uses != 1 else ''}",
                 mouse_handler=handler,
-            )
-        if len(providers) > capacity:
-            lines.append(
-                (
-                    "class:frame.active.scroll" if focused else "class:frame.scroll",
-                    f"  ↕ {start + 1}-{end}/{len(providers)}\n",
-                )
             )
         return lines
 
@@ -1095,6 +1212,7 @@ class _LaunchScreen:
             content=session_control,
             wrap_lines=False,
             always_hide_cursor=True,
+            allow_scroll_beyond_bottom=False,
             height=D(preferred=20, min=6),
         )
         self._app_window = Window(
@@ -1104,24 +1222,38 @@ class _LaunchScreen:
             content=provider_control,
             wrap_lines=False,
             always_hide_cursor=True,
-            height=D(preferred=10, min=4),
+            allow_scroll_beyond_bottom=False,
+            # Fixed preferred height so directory show/hide does not reflow peers.
+            height=D(preferred=12, min=8, max=14),
         )
         self._permission_window = Window(
             content=permission_control,
-            height=D(min=6, max=10),
+            height=D(min=6, max=8),
             always_hide_cursor=True,
         )
+        # Directory slot always occupies the same height: editable path for new
+        # sessions, locked session cwd label when resuming (no left-column jump).
         self._dir_window = Box(self.dir_area, padding_left=1, padding_right=1, height=1)
+        self._resume_cwd_window = Window(
+            FormattedTextControl(self._resume_directory_text, focusable=False, show_cursor=False),
+            height=1,
+            always_hide_cursor=True,
+        )
         self._buttons_window = Window(content=button_control, height=2, always_hide_cursor=True)
+
+        directory_slot = ConditionalContainer(
+            content=self._highlighted_frame(self._dir_window, "dir", "directory"),
+            filter=Condition(lambda: self.selected_session is None),
+            alternative_content=self._highlighted_frame(
+                self._resume_cwd_window, "dir", "session cwd"
+            ),
+        )
 
         left = HSplit(
             [
                 self._highlighted_frame(self._app_window, "app", "app"),
                 self._highlighted_frame(self._provider_window, "provider", "provider"),
-                ConditionalContainer(
-                    self._highlighted_frame(self._dir_window, "dir", "directory"),
-                    filter=Condition(lambda: self.selected_session is None),
-                ),
+                directory_slot,
                 ConditionalContainer(
                     self._highlighted_frame(self._permission_window, "permissions", "permissions"),
                     filter=Condition(lambda: self.current_app.supports_permission_overrides),
@@ -1166,8 +1298,8 @@ class _LaunchScreen:
     # --- mouse handlers -----------------------------------------------
 
     def _click_session(self, row: int) -> None:
-        # Windowed list: row is relative to the visible window, not absolute.
-        entry = self._session_scroll + row // _SESSION_ROW
+        # Full-list content: Window maps screen y → content row (incl. scroll).
+        entry = row // _SESSION_ROW
         max_index = self._session_entry_count() - 1
         if 0 <= entry <= max_index:
             self._set_session(entry)
@@ -1177,7 +1309,7 @@ class _LaunchScreen:
             self._set_app(row)
 
     def _click_provider(self, row: int) -> None:
-        entry = self._provider_scroll + row // _PROVIDER_ROW
+        entry = row // _PROVIDER_ROW
         providers = self.filtered_providers
         if 0 <= entry < len(providers):
             self.provider_index = entry
@@ -1297,6 +1429,14 @@ class _LaunchScreen:
         def _slash(event: Any) -> None:
             self._start_filter()
 
+        sessions_scope = Condition(lambda: self.focus == "sessions" and not self.filter_mode)
+
+        @bindings.add("a", filter=sessions_scope, eager=True)
+        def _toggle_scope(event: Any) -> None:
+            self._toggle_sessions_scope()
+            with contextlib.suppress(Exception):
+                get_app().invalidate()
+
         @bindings.add("backspace", filter=filtering, eager=True)
         def _bs(event: Any) -> None:
             self._filter_backspace()
@@ -1311,6 +1451,7 @@ class _LaunchScreen:
 
         # Bind printable characters explicitly. Never use eager ``<any>``:
         # it also matches Vt100MouseEvent and would swallow clicks/scroll.
+        # 'a' on sessions (not filtering) is reserved for scope toggle above.
         _printable = (
             "abcdefghijklmnopqrstuvwxyz"
             "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -1323,7 +1464,13 @@ class _LaunchScreen:
             def _filter_char(event: KeyPressEvent, char: str = ch) -> None:
                 self._filter_append(char)
 
-            @bindings.add(ch, filter=typing_start, eager=True)
+            if ch == "a":
+                # Covered by sessions_scope toggle when focus is sessions.
+                start_filter = Condition(lambda: not self.filter_mode and self.focus == "provider")
+            else:
+                start_filter = typing_start
+
+            @bindings.add(ch, filter=start_filter, eager=True)
             def _start_char(event: KeyPressEvent, char: str = ch) -> None:
                 if char.isdigit() and char != "0":
                     self._jump(int(char) - 1)
