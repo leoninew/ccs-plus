@@ -60,13 +60,13 @@ ccsp provider show "<provider-name>"
 
 #### 2. 添加 provider
 
-添加 provider 时省略 `--api-key`，命令会以隐藏输入提示输入密钥：
+添加 provider 时，名称、endpoint、API Key 和模型均为必填字段：
 
 ```bash
-ccsp provider add claude --name "<provider-name>" --endpoint "https://api.example.com/v1" --model "<model-id>"
+ccsp provider add claude --name "<provider-name>" --endpoint "https://api.example.com/v1" --api-key "<api-key>" --model "<model-id>"
 ```
 
-可通过 `--api-key` 非交互式传入密钥，`--effort` 和 `--notes` 分别设置默认推理等级和备注。
+同一 app 内的 provider 名称必须唯一，且名称比较忽略首尾空格和大小写。`--effort` 和 `--notes` 分别设置默认推理等级和备注。
 
 ### 启动
 

@@ -444,6 +444,10 @@ def test_provider_add_does_not_echo_api_key(monkeypatch, tmp_path) -> None:
     added = []
 
     class Repository:
+        def list(self, apps):
+            assert apps == [AppKind.CODEX]
+            return []
+
         def add(self, provider):
             added.append(provider)
 
@@ -456,7 +460,7 @@ def test_provider_add_does_not_echo_api_key(monkeypatch, tmp_path) -> None:
             "add",
             "codex",
             "--name",
-            "Example Provider",
+            " Example Provider ",
             "--endpoint",
             "https://api.example.test/v1",
             "--api-key",
@@ -471,16 +475,41 @@ def test_provider_add_does_not_echo_api_key(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
     assert len(added) == 1
     assert added[0].app is AppKind.CODEX
+    assert added[0].name == "Example Provider"
     assert "add-secret-key" not in result.output
     config = added[0].settings_config["config"]
     assert 'sandbox_mode = "danger-full-access"' in config
     assert 'approval_policy = "never"' in config
 
 
+def test_provider_add_requires_api_key() -> None:
+    result = CliRunner().invoke(
+        main,
+        [
+            "provider",
+            "add",
+            "claude",
+            "--name",
+            "Example Provider",
+            "--endpoint",
+            "https://api.example.test/v1",
+            "--model",
+            "example-model",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Missing option '--api-key'" in result.output
+
+
 def test_provider_add_grok_writes_default_reasoning_effort(monkeypatch, tmp_path) -> None:
     added = []
 
     class Repository:
+        def list(self, apps):
+            assert apps == [AppKind.GROK]
+            return []
+
         def add(self, provider):
             added.append(provider)
 
@@ -508,6 +537,40 @@ def test_provider_add_grok_writes_default_reasoning_effort(monkeypatch, tmp_path
     assert result.exit_code == 0
     config = added[0].settings_config["config"]
     assert 'default_reasoning_effort = "xhigh"' in config
+
+
+def test_provider_add_rejects_existing_name_for_the_same_app(monkeypatch, tmp_path) -> None:
+    existing = _provider(AppKind.CODEX, "Example Provider")
+
+    class Repository:
+        def list(self, apps):
+            assert apps == [AppKind.CODEX]
+            return [existing]
+
+        def add(self, provider):
+            raise AssertionError("Duplicate provider names must not be added.")
+
+    monkeypatch.setattr("ccs_plus.cli._settings", lambda: _settings(tmp_path))
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(
+        main,
+        [
+            "provider",
+            "add",
+            "codex",
+            "--name",
+            " example provider ",
+            "--endpoint",
+            "https://api.example.test/v1",
+            "--api-key",
+            "add-secret-key",
+            "--model",
+            "example-model",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Providers already exist: codex/example provider" in result.output
 
 
 def test_provider_export_writes_default_encrypted_backup(monkeypatch, tmp_path) -> None:

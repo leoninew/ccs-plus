@@ -132,7 +132,7 @@ def list_providers(app_name: str | None, as_json: bool) -> None:
 @click.argument("app_name", type=click.Choice([item.value for item in AppKind]))
 @click.option("--name", required=True, help="Provider display name.")
 @click.option("--endpoint", required=True, help="Exact provider base URL.")
-@click.option("--api-key", help="API key. Omit to enter it without terminal echo.")
+@click.option("--api-key", required=True, help="API key.")
 @click.option("--model", required=True, help="Provider model ID.")
 @click.option("--effort", help="Optional default reasoning effort.")
 @click.option("--notes", help="Optional provider notes.")
@@ -140,18 +140,16 @@ def add_provider(
     app_name: str,
     name: str,
     endpoint: str,
-    api_key: str | None,
+    api_key: str,
     model: str,
     effort: str | None,
     notes: str | None,
 ) -> None:
     """Add a custom provider directly to the cc-switch database."""
     try:
-        if api_key is None:
-            api_key = click.prompt("API Key", hide_input=True, confirmation_prompt=False)
         value = NewProvider(
             app=_app(app_name),
-            name=name,
+            name=name.strip(),
             endpoint=endpoint,
             api_key=api_key,
             model=model,
@@ -159,8 +157,10 @@ def add_provider(
             notes=notes,
         )
         validate_new_provider(value)
+        repository = _repository()
+        _validate_available_provider_names([value], repository.list([value.app]))
         provider = build_provider(value, _settings().codex.provider_defaults())
-        _repository().add(provider)
+        repository.add(provider)
         click.echo(f"Added {provider.app.value} provider {provider.id}.")
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -203,7 +203,7 @@ def import_providers(arguments: tuple[str, ...]) -> None:
         values = parse_backup_document(document, _encryption_key())
         values = [value for value in values if value.app in apps]
         repository = _repository()
-        _validate_import_names(values, repository.list(apps))
+        _validate_available_provider_names(values, repository.list(apps))
         codex = _settings().codex.provider_defaults()
         repository.add_many(build_provider(value, codex) for value in values)
         click.echo(f"Imported {len(values)} custom providers from {input_path}.")
@@ -438,7 +438,7 @@ def _read_backup(path: Path) -> object:
         raise ProviderError(f"Unable to read import file {path}: {exc}") from exc
 
 
-def _validate_import_names(values: list[NewProvider], existing: list[Provider]) -> None:
+def _validate_available_provider_names(values: list[NewProvider], existing: list[Provider]) -> None:
     existing_names = {(provider.app, provider.name.strip().casefold()) for provider in existing}
     conflicts = [
         f"{value.app.value}/{value.name.strip()}"
