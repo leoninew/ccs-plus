@@ -99,7 +99,7 @@ profile/state 仍有效扩展项的保留规则。缓存仍不是 enablement 的
 6. 若 cache 中存在插件但 user Home 没有其安装注册，启动结果可诊断，且不会在未授权
    情况下自动将缓存视为启用插件。
 7. 用户可执行 `provider export codex`、`provider import codex <file>` 或
-   `provider reset codex --no-dry-run` 仅维护一个 app；省略 app 时三条命令均处理三端。
+   `provider reset codex --yes` 仅维护一个 app；省略 app 时三条命令均处理三端。
 
 ## Acceptance
 

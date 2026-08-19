@@ -85,7 +85,7 @@ provider 隔离 runtime home。
 既有业务边界内操作全部 app。export 保持已有的 `export <output-path>` 兼容形式，并增加
 `export <app> [output-path]`；import 使用 `import <app> <input-path>`。限定 import 必须
 先通过 `parse_backup_document()` 验证整份备份，再按 app 过滤记录并检查该 app 的名称冲突。
-reset 的 dry-run 与实际删除均使用同一 app 集合，仍只删除非官方 provider；仅其中的
+reset 的 dry-run 与经 `--yes` 确认的实际删除均使用同一 app 集合，仍只删除非官方 provider；仅其中的
 Codex 目标继续清理对应的 managed profile。未提供 output path 的 export 按 scope 生成
 `providers-all-<timestamp>.json` 或 `providers-<app>-<timestamp>.json`，避免三端和单端
 备份在 `data/` 中语义不明。

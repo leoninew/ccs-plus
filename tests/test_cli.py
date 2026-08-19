@@ -722,7 +722,7 @@ def test_provider_reset_defaults_to_dry_run(monkeypatch) -> None:
     assert "claude/Example Provider" in result.output
 
 
-def test_provider_reset_deletes_all_non_official_providers_by_default(monkeypatch) -> None:
+def test_provider_reset_deletes_all_non_official_providers_with_confirmation(monkeypatch) -> None:
     deleted = []
 
     class Repository:
@@ -736,7 +736,7 @@ def test_provider_reset_deletes_all_non_official_providers_by_default(monkeypatc
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
 
-    result = CliRunner().invoke(main, ["provider", "reset", "--no-dry-run"])
+    result = CliRunner().invoke(main, ["provider", "reset", "--yes"])
 
     assert result.exit_code == 0
     assert deleted == [list(AppKind)]
@@ -765,13 +765,13 @@ def test_provider_reset_removes_deleted_codex_profiles(monkeypatch, tmp_path) ->
         lambda home, provider_id: removed.append((home, provider_id)),
     )
 
-    result = CliRunner().invoke(main, ["provider", "reset", "codex", "--no-dry-run"])
+    result = CliRunner().invoke(main, ["provider", "reset", "codex", "--yes"])
 
     assert result.exit_code == 0
     assert removed == [(settings.codex.home, codex.id)]
 
 
-def test_provider_show_includes_unredacted_key_configuration(monkeypatch) -> None:
+def test_provider_show_renders_a_redacted_add_command(monkeypatch) -> None:
     provider = _provider()
 
     class Repository:
@@ -783,14 +783,42 @@ def test_provider_show_includes_unredacted_key_configuration(monkeypatch) -> Non
     result = CliRunner().invoke(main, ["provider", "show", provider.name])
 
     assert result.exit_code == 0
-    assert "cli-secret-key" in result.output
-    assert "api_endpoint" in result.output
-    assert list(json.loads(result.output)[0]) == [
-        "api_endpoint",
-        "api_key",
-        "model",
-        "reasoning_effort",
-    ]
+    assert result.output == (
+        "ccsp provider add claude --name 'Example Provider' "
+        "--endpoint 'https://api.example.test/v1' --api-key 'xxxx' "
+        "--model 'example-model' --effort 'high'\n"
+    )
+    assert "cli-secret-key" not in result.output
+
+
+def test_provider_show_secret_includes_api_key(monkeypatch) -> None:
+    provider = _provider()
+
+    class Repository:
+        def find_by_name(self, name):
+            assert name == provider.name
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(main, ["provider", "show", provider.name, "--show-secret"])
+
+    assert result.exit_code == 0
+    assert "--api-key 'cli-secret-key'" in result.output
+
+
+def test_provider_show_quotes_arguments_for_bash(monkeypatch) -> None:
+    provider = _provider(name="O'Connor")
+
+    class Repository:
+        def find_by_name(self, name):
+            assert name == provider.name
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(main, ["provider", "show", provider.name])
+
+    assert result.exit_code == 0
+    assert "--name 'O'\"'\"'Connor'" in result.output
 
 
 def test_provider_delete_requires_confirmation() -> None:

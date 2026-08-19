@@ -214,17 +214,17 @@ def import_providers(arguments: tuple[str, ...]) -> None:
 @provider.command("reset", context_settings=HELP_CONTEXT_SETTINGS)
 @click.argument("app_name", type=click.Choice([item.value for item in AppKind]), required=False)
 @click.option(
-    "--no-dry-run",
+    "--yes",
     is_flag=True,
-    help="Delete all non-official providers instead of previewing the reset.",
+    help="Confirm deletion of all non-official providers.",
 )
-def reset_providers(app_name: str | None, no_dry_run: bool) -> None:
+def reset_providers(app_name: str | None, yes: bool) -> None:
     """Preview or delete non-official providers for all apps or one app."""
     try:
         apps = _selected_apps(app_name)
         repository = _repository()
         targets = [provider for provider in repository.list(apps) if not provider.is_official]
-        if not no_dry_run:
+        if not yes:
             count = len(targets)
             noun = "provider" if count == 1 else "providers"
             click.echo(f"Dry run: would delete {count} non-official {noun}.")
@@ -243,16 +243,15 @@ def reset_providers(app_name: str | None, no_dry_run: bool) -> None:
 
 @provider.command("show", context_settings=HELP_CONTEXT_SETTINGS)
 @click.argument("name")
-def show_provider(name: str) -> None:
-    """Show key configuration for every exact provider-name match."""
+@click.option("--show-secret", is_flag=True, help="Show API keys without masking them.")
+def show_provider(name: str, show_secret: bool) -> None:
+    """Show every exact provider-name match as a reusable add command."""
     try:
-        click.echo(
-            json.dumps(
-                [_provider_show_record(provider) for provider in _repository().find_by_name(name)],
-                ensure_ascii=False,
-                indent=2,
-            )
+        commands = (
+            _provider_show_command(provider, show_secret=show_secret)
+            for provider in _repository().find_by_name(name)
         )
+        click.echo("\n\n".join(commands))
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -521,7 +520,7 @@ def _provider_display_record(entry: ProviderListEntry) -> dict[str, object]:
     }
 
 
-def _provider_show_record(provider: Provider) -> dict[str, object]:
+def _provider_show_command(provider: Provider, *, show_secret: bool) -> str:
     display = display_configuration(provider)
     try:
         runtime = runtime_from_provider(provider)
@@ -532,9 +531,25 @@ def _provider_show_record(provider: Provider) -> dict[str, object]:
         api_key = None
         model = display.model
         effort = None
-    return {
-        "api_endpoint": display.endpoint or (provider.endpoints[0] if provider.endpoints else None),
-        "api_key": api_key,
-        "model": model,
-        "reasoning_effort": effort,
-    }
+
+    options = [
+        f"ccsp provider add {provider.app.value}",
+        f"--name {_bash_quote(provider.name)}",
+        f"--endpoint {_bash_quote(display.endpoint or _first_endpoint(provider))}",
+        f"--api-key {_bash_quote(api_key if show_secret else 'xxxx')}",
+        f"--model {_bash_quote(model)}",
+    ]
+    if effort is not None:
+        options.append(f"--effort {_bash_quote(effort)}")
+    if provider.notes is not None:
+        options.append(f"--notes {_bash_quote(provider.notes)}")
+    return " ".join(options)
+
+
+def _first_endpoint(provider: Provider) -> str | None:
+    return provider.endpoints[0] if provider.endpoints else None
+
+
+def _bash_quote(value: str | None) -> str:
+    """Quote one literal argument for the Bash commands shown to users."""
+    return "'" + (value or "").replace("'", "'\"'\"'") + "'"
