@@ -8,12 +8,20 @@ from pathlib import Path
 import pytest
 import tomlkit
 
-from ccs_plus.domain import AppKind, ClaudeRuntime, CodexRuntime, GrokRuntime, Provider
+from ccs_plus.domain import (
+    AppKind,
+    ClaudeRuntime,
+    CodexRuntime,
+    GrokRuntime,
+    OpenCodeRuntime,
+    Provider,
+)
 from ccs_plus.home_visibility import (
     ClaudeHomeVisibility,
     CodexHomeVisibility,
     DisabledHomeVisibility,
     GrokHomeVisibility,
+    OpenCodeHomeVisibility,
     _is_link,
     _links_to,
     home_visibility_for,
@@ -66,6 +74,9 @@ def test_home_visibility_factory_selects_runtime_implementation(
     claude = home_visibility_for(_runtime(ClaudeRuntime, AppKind.CLAUDE), settings, tmp_path)
     codex = home_visibility_for(_runtime(CodexRuntime, AppKind.CODEX), settings, tmp_path)
     grok = home_visibility_for(_runtime(GrokRuntime, AppKind.GROK), settings, tmp_path)
+    opencode = home_visibility_for(
+        _runtime(OpenCodeRuntime, AppKind.OPENCODE), settings, tmp_path
+    )
 
     assert isinstance(claude, ClaudeHomeVisibility)
     assert claude.mcp_key == settings.claude.visibility.mcp_key
@@ -76,6 +87,32 @@ def test_home_visibility_factory_selects_runtime_implementation(
     assert isinstance(grok, GrokHomeVisibility)
     assert grok.extension_keys == settings.grok.visibility.extension_keys
     assert grok.hooks == settings.grok.visibility.hooks
+    assert isinstance(opencode, OpenCodeHomeVisibility)
+    assert opencode.user_data_home == settings.opencode.user_data_home
+    assert opencode.is_official is True
+
+
+def test_opencode_official_visibility_exposes_user_data(tmp_path: Path) -> None:
+    user_config = tmp_path / "user-opencode"
+    user_data = tmp_path / "user-opencode-data"
+    (user_config / "skills" / "shared").mkdir(parents=True)
+    (user_data / "auth.json").parent.mkdir(parents=True)
+    (user_data / "auth.json").write_text('{"provider": "local"}\n', encoding="utf-8")
+    (user_data / "opencode.db").write_bytes(b"sqlite")
+
+    visibility = OpenCodeHomeVisibility(
+        state_home=tmp_path / "state-opencode",
+        user_home=user_config,
+        user_data_home=user_data,
+        is_official=True,
+    )
+    visibility.apply()
+
+    assert (visibility.state_home / "config" / "opencode" / "skills" / "shared").exists()
+    assert (visibility.state_home / "share" / "opencode" / "auth.json").read_text(
+        encoding="utf-8"
+    ) == '{"provider": "local"}\n'
+    assert (visibility.state_home / "share" / "opencode" / "opencode.db").read_bytes() == b"sqlite"
 
 
 def test_disabled_codex_visibility_keeps_profile_extension_policy(
@@ -88,6 +125,10 @@ def test_disabled_codex_visibility_keeps_profile_extension_policy(
         settings,
         tmp_path,
         enabled=False,
+    )
+    assert isinstance(
+        home_visibility_for(_runtime(OpenCodeRuntime, AppKind.OPENCODE), settings, tmp_path),
+        OpenCodeHomeVisibility,
     )
 
     assert isinstance(visibility, DisabledHomeVisibility)

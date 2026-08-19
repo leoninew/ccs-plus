@@ -35,7 +35,15 @@ from prompt_toolkit.validation import ValidationError, Validator
 from prompt_toolkit.widgets import Box, TextArea
 
 from ccs_plus.adapters import display_configuration, runtime_from_provider
-from ccs_plus.domain import AppKind, Provider, ProviderError
+from ccs_plus.domain import (
+    AppKind,
+    ClaudeRuntime,
+    CodexRuntime,
+    GrokRuntime,
+    OpenCodeRuntime,
+    Provider,
+    ProviderError,
+)
 from ccs_plus.launch_history import LaunchHistory
 from ccs_plus.sessions import Session, list_sessions
 from ccs_plus.settings import AppSettings
@@ -65,15 +73,21 @@ STYLE = Style.from_dict(
         "badge.claude": "bg:#d97706 #0a0e14 bold",
         "badge.codex": "bg:#10b981 #0a0e14 bold",
         "badge.grok": "bg:#a855f7 #0a0e14 bold",
+        "badge.opencode": "bg:#38bdf8 #0a0e14 bold",
         "badge.claude.focused": "bg:#fbbf24 #0a0e14 bold",
         "badge.codex.focused": "bg:#34d399 #0a0e14 bold",
         "badge.grok.focused": "bg:#c084fc #0a0e14 bold",
+        "badge.opencode.focused": "bg:#7dd3fc #0a0e14 bold",
         "status.ok": "#3fb950 bold",
         "status.err": "#ff7b72 bold",
         "button.launch": "bg:#238636 #ffffff bold",
-        "button.launch.focused": "bg:#3fb950 #000000 bold underline",
+        "button.launch.focused": "bg:#3fb950 #0a0e14 bold",
+        "button.launch.border": "bg:#238636 #2ea043 bold",
+        "button.launch.border.focused": "bg:#3fb950 #56d364 bold",
         "button.cancel": "bg:#6e2121 #ffffff bold",
-        "button.cancel.focused": "bg:#ff7b72 #000000 bold underline",
+        "button.cancel.focused": "bg:#ff7b72 #0a0e14 bold",
+        "button.cancel.border": "bg:#6e2121 #da3633 bold",
+        "button.cancel.border.focused": "bg:#ff7b72 #ff9b95 bold",
         "text-area": "bg:#0d1117 #f0f6fc",
         "text-area.focused": "bg:#161b22 #ffffff bold",
     }
@@ -87,44 +101,169 @@ SessionScope = Literal["this_dir", "all"]
 
 
 @dataclass(frozen=True)
-class ApprovalPreset:
+class PermissionPreset:
+    """Per-app launch permission choice exposed in the TUI."""
+
     key: str
     label: str
-    approval_policy: str
-    sandbox_mode: str
     description: str
+    # Claude
+    permission_mode: str | None = None
+    # Codex
+    approval_policy: str | None = None
+    sandbox_mode: str | None = None
+    # Grok
+    always_approve: bool | None = None
 
 
-APPROVAL_PRESETS: tuple[ApprovalPreset, ...] = (
-    ApprovalPreset(
-        "yolo",
-        "YOLO",
-        "never",
-        "danger-full-access",
-        "never ask · full disk access",
+# Values are constrained to flags documented by each native CLI's --help.
+PERMISSION_PRESETS: dict[AppKind, tuple[PermissionPreset, ...]] = {
+    AppKind.CLAUDE: (
+        PermissionPreset(
+            "bypass",
+            "Bypass",
+            "skip all permission prompts",
+            permission_mode="bypassPermissions",
+        ),
+        PermissionPreset(
+            "accept-edits",
+            "Accept edits",
+            "auto-accept file edits",
+            permission_mode="acceptEdits",
+        ),
+        PermissionPreset(
+            "auto",
+            "Auto",
+            "automatic permission mode",
+            permission_mode="auto",
+        ),
+        PermissionPreset(
+            "plan",
+            "Plan",
+            "plan only · no tool execution",
+            permission_mode="plan",
+        ),
+        PermissionPreset(
+            "manual",
+            "Manual",
+            "confirm each sensitive action",
+            permission_mode="manual",
+        ),
+        PermissionPreset(
+            "dont-ask",
+            "Don't ask",
+            "proceed without interactive prompts",
+            permission_mode="dontAsk",
+        ),
     ),
-    ApprovalPreset(
-        "on-request",
-        "On request",
-        "on-request",
-        "workspace-write",
-        "ask when needed · workspace write",
+    AppKind.CODEX: (
+        PermissionPreset(
+            "yolo",
+            "YOLO",
+            "never ask · full disk access",
+            approval_policy="never",
+            sandbox_mode="danger-full-access",
+        ),
+        PermissionPreset(
+            "auto-workspace",
+            "Auto (workspace)",
+            "never ask · workspace write",
+            approval_policy="never",
+            sandbox_mode="workspace-write",
+        ),
+        PermissionPreset(
+            "on-request",
+            "On request",
+            "model decides when to ask · workspace write",
+            approval_policy="on-request",
+            sandbox_mode="workspace-write",
+        ),
+        PermissionPreset(
+            "untrusted",
+            "Untrusted",
+            "only trusted commands · read-only",
+            approval_policy="untrusted",
+            sandbox_mode="read-only",
+        ),
     ),
-    ApprovalPreset(
-        "auto-workspace",
-        "Auto (workspace)",
-        "never",
-        "workspace-write",
-        "never ask · workspace write",
+    AppKind.GROK: (
+        PermissionPreset(
+            "yolo",
+            "YOLO",
+            "no sandbox · auto-approve tools",
+            sandbox_mode="off",
+            always_approve=True,
+        ),
+        PermissionPreset(
+            "workspace-auto",
+            "Workspace + auto",
+            "workspace sandbox · auto-approve",
+            sandbox_mode="workspace",
+            always_approve=True,
+        ),
+        PermissionPreset(
+            "workspace-ask",
+            "Workspace + ask",
+            "workspace sandbox · confirm tools",
+            sandbox_mode="workspace",
+            always_approve=False,
+        ),
+        PermissionPreset(
+            "read-only",
+            "Read-only",
+            "read-only sandbox · confirm tools",
+            sandbox_mode="read-only",
+            always_approve=False,
+        ),
+        PermissionPreset(
+            "strict",
+            "Strict",
+            "strict sandbox · confirm tools",
+            sandbox_mode="strict",
+            always_approve=False,
+        ),
     ),
-    ApprovalPreset(
-        "ask",
-        "Ask",
-        "on-failure",
-        "workspace-write",
-        "ask on failure · workspace write",
+    AppKind.OPENCODE: (
+        PermissionPreset(
+            "allow",
+            "Allow all",
+            "permission allow · confirm when needed",
+            permission_mode="allow",
+            always_approve=False,
+        ),
+        PermissionPreset(
+            "allow-auto",
+            "Allow + auto",
+            "permission allow · auto-approve prompts",
+            permission_mode="allow",
+            always_approve=True,
+        ),
+        PermissionPreset(
+            "ask",
+            "Ask",
+            "permission ask · confirm tools",
+            permission_mode="ask",
+            always_approve=False,
+        ),
+        PermissionPreset(
+            "ask-auto",
+            "Ask + auto",
+            "permission ask · auto-approve non-denied",
+            permission_mode="ask",
+            always_approve=True,
+        ),
+        PermissionPreset(
+            "deny",
+            "Deny",
+            "permission deny · block tool actions",
+            permission_mode="deny",
+            always_approve=False,
+        ),
     ),
-)
+}
+
+# Back-compat alias for tests that still import the old name.
+APPROVAL_PRESETS = PERMISSION_PRESETS[AppKind.CODEX]
 
 
 @dataclass(frozen=True)
@@ -132,8 +271,10 @@ class LaunchPlan:
     provider: Provider
     cwd: Path
     session: Session | None
-    approval_policy: str | None
-    sandbox_mode: str | None
+    approval_policy: str | None = None
+    sandbox_mode: str | None = None
+    permission_mode: str | None = None
+    always_approve: bool | None = None
 
 
 def run_launcher(
@@ -355,33 +496,91 @@ class _LaunchScreen:
                     best = app
         return best
 
+    def _permission_presets(self) -> tuple[PermissionPreset, ...]:
+        return PERMISSION_PRESETS[self.current_app]
+
     def _default_permission_index(self) -> int:
-        policy, sandbox = self._effective_permissions()
-        for index, preset in enumerate(APPROVAL_PRESETS):
-            if preset.approval_policy == policy and preset.sandbox_mode == sandbox:
+        presets = self._permission_presets()
+        mode, approval, sandbox, always = self._effective_permission_values()
+        for index, preset in enumerate(presets):
+            if self.current_app is AppKind.CLAUDE and preset.permission_mode == mode:
+                return index
+            if (
+                self.current_app is AppKind.CODEX
+                and preset.approval_policy == approval
+                and preset.sandbox_mode == sandbox
+            ):
+                return index
+            if (
+                self.current_app is AppKind.GROK
+                and preset.sandbox_mode == sandbox
+                and preset.always_approve is always
+            ):
+                return index
+            if (
+                self.current_app is AppKind.OPENCODE
+                and preset.permission_mode == mode
+                and preset.always_approve is always
+            ):
                 return index
         return 0
 
-    def _effective_permissions(self) -> tuple[str, str]:
-        policy = self.settings.codex.approval_policy
-        sandbox = self.settings.codex.sandbox_mode
+    def _effective_permission_values(
+        self,
+    ) -> tuple[str | None, str | None, str | None, bool | None]:
+        """Return (permission_mode, approval_policy, sandbox_mode, always_approve)."""
         provider = self.current_provider
-        if provider is not None and provider.app.supports_permission_overrides:
-            try:
-                runtime = runtime_from_provider(provider)
-            except ProviderError:
-                pass
-            else:
-                provider_policy, provider_sandbox = runtime.permission_overrides()
-                policy = provider_policy or policy
-                sandbox = provider_sandbox or sandbox
-        return policy, sandbox
+        app = self.current_app
+        if provider is None:
+            if app is AppKind.CLAUDE:
+                return self.settings.claude.permission_mode, None, None, None
+            if app is AppKind.CODEX:
+                return (
+                    None,
+                    self.settings.codex.approval_policy,
+                    self.settings.codex.sandbox_mode,
+                    None,
+                )
+            if app is AppKind.OPENCODE:
+                return (
+                    self.settings.opencode.permission_mode,
+                    None,
+                    None,
+                    self.settings.opencode.always_approve,
+                )
+            return None, None, self.settings.grok.sandbox_mode, self.settings.grok.always_approve
+        try:
+            runtime = runtime_from_provider(provider).with_permission_defaults(self.settings)
+        except ProviderError:
+            if app is AppKind.CLAUDE:
+                return self.settings.claude.permission_mode, None, None, None
+            if app is AppKind.CODEX:
+                return (
+                    None,
+                    self.settings.codex.approval_policy,
+                    self.settings.codex.sandbox_mode,
+                    None,
+                )
+            if app is AppKind.OPENCODE:
+                return (
+                    self.settings.opencode.permission_mode,
+                    None,
+                    None,
+                    self.settings.opencode.always_approve,
+                )
+            return None, None, self.settings.grok.sandbox_mode, self.settings.grok.always_approve
+        if isinstance(runtime, ClaudeRuntime):
+            return runtime.permission_mode, None, None, None
+        if isinstance(runtime, CodexRuntime):
+            return None, runtime.approval_policy, runtime.sandbox_mode, None
+        if isinstance(runtime, GrokRuntime):
+            return None, None, runtime.sandbox_mode, runtime.always_approve
+        if isinstance(runtime, OpenCodeRuntime):
+            return runtime.permission_mode, None, None, runtime.always_approve
+        return None, None, None, None
 
     def _sync_permission_selection(self) -> None:
-        if self.current_app.supports_permission_overrides:
-            self.permission_index = self._default_permission_index()
-        else:
-            self.permission_index = 0
+        self.permission_index = self._default_permission_index()
         self.permission_override = False
 
     @property
@@ -482,8 +681,9 @@ class _LaunchScreen:
         return None
 
     @property
-    def current_preset(self) -> ApprovalPreset:
-        return APPROVAL_PRESETS[self.permission_index]
+    def current_preset(self) -> PermissionPreset:
+        presets = self._permission_presets()
+        return presets[min(self.permission_index, len(presets) - 1)]
 
     def _session_entry_count(self) -> int:
         return 1 + len(self.filtered_sessions)
@@ -516,8 +716,6 @@ class _LaunchScreen:
         self._write_directory(str(self.default_cwd))
         self.status = ""
         self.status_error = False
-        if self.focus == "permissions" and not self.current_app.supports_permission_overrides:
-            self.focus = "dir" if self.selected_session is None else "provider"
         if self.focus == "dir" and self.selected_session is not None:
             self.focus = "sessions"
         self._ensure_provider_visible()
@@ -544,8 +742,7 @@ class _LaunchScreen:
         order = ["app", "provider"]
         if self.selected_session is None:
             order.append("dir")
-        if self.current_app.supports_permission_overrides:
-            order.append("permissions")
+        order.append("permissions")
         order.extend(["sessions", "buttons"])
         return order
 
@@ -652,7 +849,11 @@ class _LaunchScreen:
         info = window.render_info
         if info is None:
             return default
-        return max(1, info.window_height)
+        # Prefer content height (rows actually painted for the control body).
+        height = getattr(info, "window_height", None)
+        if not isinstance(height, int) or height < 1:
+            return default
+        return height
 
     def _resume_directory_text(self) -> StyleAndTextTuples:
         session = self.selected_session
@@ -749,11 +950,14 @@ class _LaunchScreen:
             return
         approval: str | None = None
         sandbox: str | None = None
-        if self.current_app.supports_permission_overrides:
+        permission_mode: str | None = None
+        always_approve: bool | None = None
+        if self.permission_override:
             preset = self.current_preset
-            if self.permission_override:
-                approval = preset.approval_policy
-                sandbox = preset.sandbox_mode
+            approval = preset.approval_policy
+            sandbox = preset.sandbox_mode
+            permission_mode = preset.permission_mode
+            always_approve = preset.always_approve
         self.application.exit(
             result=LaunchPlan(
                 provider=provider,
@@ -761,6 +965,8 @@ class _LaunchScreen:
                 session=session,
                 approval_policy=approval,
                 sandbox_mode=sandbox,
+                permission_mode=permission_mode,
+                always_approve=always_approve,
             )
         )
 
@@ -1080,7 +1286,8 @@ class _LaunchScreen:
     def _permission_lines(self) -> StyleAndTextTuples:
         lines: StyleAndTextTuples = []
         focused = self.focus == "permissions"
-        for index, preset in enumerate(APPROVAL_PRESETS):
+        presets = self._permission_presets()
+        for index, preset in enumerate(presets):
             selected = index == self.permission_index
             style = self._row_style(focused=focused and selected, selected=selected)
             sub_style = "class:item.focused-sub" if focused and selected else "class:item.muted"
@@ -1098,25 +1305,6 @@ class _LaunchScreen:
             lines.append((style, f" {marker}{preset.label}\n", handler))
             lines.append((sub_style, f"    {preset.description}\n", handler))
         return lines
-
-    def _button_text(self) -> StyleAndTextTuples:
-        focused = self.focus == "buttons"
-        launch = (
-            "class:button.launch.focused"
-            if focused and self.button_index == 0
-            else "class:button.launch"
-        )
-        cancel = (
-            "class:button.cancel.focused"
-            if focused and self.button_index == 1
-            else "class:button.cancel"
-        )
-        return [
-            (launch, "  ▶ Launch  "),
-            ("", "   "),
-            (cancel, "  ✕ Cancel  "),
-            ("", "\n"),
-        ]
 
     def _row_style(self, *, focused: bool, selected: bool) -> str:
         if focused:
@@ -1168,15 +1356,19 @@ class _LaunchScreen:
 
         def button_fragments() -> StyleAndTextTuples:
             focused = self.focus == "buttons"
-            launch = (
-                "class:button.launch.focused"
-                if focused and self.button_index == 0
-                else "class:button.launch"
+            launch_focus = focused and self.button_index == 0
+            cancel_focus = focused and self.button_index == 1
+            launch = "class:button.launch.focused" if launch_focus else "class:button.launch"
+            cancel = "class:button.cancel.focused" if cancel_focus else "class:button.cancel"
+            launch_border = (
+                "class:button.launch.border.focused"
+                if launch_focus
+                else "class:button.launch.border"
             )
-            cancel = (
-                "class:button.cancel.focused"
-                if focused and self.button_index == 1
-                else "class:button.cancel"
+            cancel_border = (
+                "class:button.cancel.border.focused"
+                if cancel_focus
+                else "class:button.cancel.border"
             )
 
             def launch_handler(mouse_event: MouseEvent) -> object:
@@ -1195,10 +1387,28 @@ class _LaunchScreen:
                 self._cancel()
                 return None
 
+            # Side-by-side square buttons; inner width must match top/bottom bar (12).
+            inner = 12
+            launch_label = f"{'▶ Launch':^{inner}}"
+            cancel_label = f"{'✕ Cancel':^{inner}}"
+            bar = "─" * inner
+            gap = "  "
             return [
-                (launch, "  ▶ Launch  ", launch_handler),
-                ("", "   "),
-                (cancel, "  ✕ Cancel  ", cancel_handler),
+                (launch_border, f"┌{bar}┐", launch_handler),
+                ("", gap),
+                (cancel_border, f"┌{bar}┐", cancel_handler),
+                ("", "\n"),
+                (launch_border, "│", launch_handler),
+                (launch, launch_label, launch_handler),
+                (launch_border, "│", launch_handler),
+                ("", gap),
+                (cancel_border, "│", cancel_handler),
+                (cancel, cancel_label, cancel_handler),
+                (cancel_border, "│", cancel_handler),
+                ("", "\n"),
+                (launch_border, f"└{bar}┘", launch_handler),
+                ("", gap),
+                (cancel_border, f"└{bar}┘", cancel_handler),
                 ("", "\n"),
             ]
 
@@ -1228,7 +1438,7 @@ class _LaunchScreen:
         )
         self._permission_window = Window(
             content=permission_control,
-            height=D(min=6, max=8),
+            height=D(min=8, preferred=12, max=14),
             always_hide_cursor=True,
         )
         # Directory slot always occupies the same height: editable path for new
@@ -1239,7 +1449,12 @@ class _LaunchScreen:
             height=1,
             always_hide_cursor=True,
         )
-        self._buttons_window = Window(content=button_control, height=2, always_hide_cursor=True)
+        self._buttons_window = Window(
+            content=button_control,
+            height=3,
+            always_hide_cursor=True,
+            align=WindowAlign.CENTER,
+        )
 
         directory_slot = ConditionalContainer(
             content=self._highlighted_frame(self._dir_window, "dir", "directory"),
@@ -1318,11 +1533,13 @@ class _LaunchScreen:
 
     def _click_permission(self, row: int) -> None:
         entry = row // _PERMISSION_ROW
-        if 0 <= entry < len(APPROVAL_PRESETS):
+        presets = self._permission_presets()
+        if 0 <= entry < len(presets):
             self._set_permission(entry)
 
     def _set_permission(self, index: int) -> None:
-        self.permission_index = max(0, min(index, len(APPROVAL_PRESETS) - 1))
+        presets = self._permission_presets()
+        self.permission_index = max(0, min(index, len(presets) - 1))
         self.permission_override = True
 
     def _scroll_sessions(self, delta: int) -> None:
@@ -1383,21 +1600,25 @@ class _LaunchScreen:
 
         @bindings.add("right", filter=list_nav, eager=True)
         def _right(event: Any) -> None:
+            # Left/right switch columns (and Launch↔Cancel), not list items.
             if self.focus == "buttons":
                 self.button_index = 1
-            elif self.focus == "app":
-                self._set_app(min(self.app_index + 1, len(self.apps) - 1))
-            elif self.focus in {"sessions", "provider", "permissions"}:
-                self._navigate(1)
+            elif self.focus == "sessions":
+                pass
+            else:
+                self._set_focus("sessions")
 
         @bindings.add("left", filter=list_nav, eager=True)
         def _left(event: Any) -> None:
             if self.focus == "buttons":
-                self.button_index = 0
-            elif self.focus == "app":
-                self._set_app(max(self.app_index - 1, 0))
-            elif self.focus in {"sessions", "provider", "permissions"}:
-                self._navigate(-1)
+                if self.button_index == 1:
+                    self.button_index = 0
+                else:
+                    self._set_focus("app")
+            elif self.focus == "sessions":
+                self._set_focus("app")
+            else:
+                pass
 
         @bindings.add("enter", eager=True)
         def _enter(event: Any) -> None:
@@ -1524,7 +1745,7 @@ class _LaunchScreen:
                     self._sync_permission_selection()
                 self._ensure_provider_visible()
         elif self.focus == "permissions":
-            if 0 <= index < len(APPROVAL_PRESETS):
+            if 0 <= index < len(self._permission_presets()):
                 self._set_permission(index)
 
 

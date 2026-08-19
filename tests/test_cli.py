@@ -174,7 +174,7 @@ def test_run_rejects_invalid_target(target: str) -> None:
     result = CliRunner().invoke(main, ["run", target])
 
     assert result.exit_code != 0
-    assert "Run target must be c, x, or g" in result.output
+    assert "Run target must be c, x, g, or o" in result.output
 
 
 def test_run_rejects_unknown_list_number(monkeypatch, tmp_path) -> None:

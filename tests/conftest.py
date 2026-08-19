@@ -16,6 +16,7 @@ from ccs_plus.settings import (
     EntryVisibilitySettings,
     GrokSettings,
     GrokVisibilitySettings,
+    OpenCodeSettings,
 )
 
 
@@ -90,9 +91,13 @@ def make_app_settings(
     claude_permission_mode: str = "bypassPermissions",
     grok_sandbox_mode: str = "workspace",
     grok_always_approve: bool = True,
+    opencode_permission_mode: str = "allow",
+    opencode_always_approve: bool = False,
     claude_user_home: Path | None = None,
     codex_user_home: Path | None = None,
     grok_user_home: Path | None = None,
+    opencode_user_home: Path | None = None,
+    opencode_user_data_home: Path | None = None,
 ) -> AppSettings:
     return AppSettings(
         project_root=root,
@@ -139,6 +144,19 @@ def make_app_settings(
                 plugins=EntryVisibilitySettings(),
                 hooks=EntryVisibilitySettings(copy_names=("orca-status.json",)),
                 installed_plugins=EntryVisibilitySettings(copy_names=("registry.json",)),
+            ),
+        ),
+        opencode=OpenCodeSettings(
+            home=root / "opencode",
+            permission_mode=opencode_permission_mode,
+            always_approve=opencode_always_approve,
+            user_home=(
+                opencode_user_home if opencode_user_home is not None else root / "user-opencode"
+            ),
+            user_data_home=(
+                opencode_user_data_home
+                if opencode_user_data_home is not None
+                else root / "user-opencode-data"
             ),
         ),
     )
@@ -212,6 +230,10 @@ def settings_root(tmp_path: Path, database_path: Path) -> Path:
                 "      installed_plugins:",
                 "        copy:",
                 "          - registry.json",
+                "  opencode:",
+                "    home: data/opencode",
+                "    permission_mode: allow",
+                "    always_approve: false",
                 "",
             ]
         ),

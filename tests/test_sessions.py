@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 from urllib.parse import quote
 
@@ -113,4 +114,62 @@ def test_list_grok_sessions_groups_prompt_history(tmp_path: Path) -> None:
     assert len(sessions) == 1
     assert sessions[0].session_id == "g1"
     assert sessions[0].title == "first prompt"
+    assert sessions[0].cwd == cwd
+
+
+def test_list_opencode_sessions_reads_sqlite(tmp_path: Path) -> None:
+    settings = make_app_settings(tmp_path)
+    db_dir = settings.opencode.home / "share" / "opencode"
+    db_dir.mkdir(parents=True)
+    db_path = db_dir / "opencode.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            slug TEXT NOT NULL,
+            directory TEXT NOT NULL,
+            title TEXT NOT NULL,
+            version TEXT NOT NULL,
+            cost REAL DEFAULT 0 NOT NULL,
+            tokens_input INTEGER DEFAULT 0 NOT NULL,
+            tokens_output INTEGER DEFAULT 0 NOT NULL,
+            tokens_reasoning INTEGER DEFAULT 0 NOT NULL,
+            tokens_cache_read INTEGER DEFAULT 0 NOT NULL,
+            tokens_cache_write INTEGER DEFAULT 0 NOT NULL,
+            time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL,
+            time_archived INTEGER
+        )
+        """
+    )
+    cwd = str(tmp_path / "project")
+    conn.execute(
+        """
+        INSERT INTO session (
+            id, project_id, slug, directory, title, version,
+            time_created, time_updated, time_archived
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "ses_abc",
+            "proj1",
+            "slug",
+            cwd,
+            "OpenCode session title",
+            "1.0",
+            1_700_000_000_000,
+            1_700_000_100_000,
+            None,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    sessions = list_sessions(settings, AppKind.OPENCODE)
+
+    assert len(sessions) == 1
+    assert sessions[0].session_id == "ses_abc"
+    assert sessions[0].title == "OpenCode session title"
     assert sessions[0].cwd == cwd

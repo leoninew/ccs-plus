@@ -73,3 +73,8 @@ apps:
       installed_plugins:
         copy:
           - registry.json
+  opencode:
+    # Isolated XDG parent: data + config live under home/{share,config}/opencode.
+    home: data/opencode
+    permission_mode: allow
+    always_approve: false

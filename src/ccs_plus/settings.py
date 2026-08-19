@@ -39,6 +39,17 @@ class GrokSettings:
 
 
 @dataclass(frozen=True)
+class OpenCodeSettings:
+    """OpenCode isolated state under ``home`` (XDG data+config parent)."""
+
+    home: Path
+    permission_mode: str
+    always_approve: bool
+    user_home: Path | None = None
+    user_data_home: Path | None = None
+
+
+@dataclass(frozen=True)
 class CodexSettings:
     home: Path
     user_home: Path
@@ -94,12 +105,14 @@ class AppSettings:
     claude: ClaudeSettings
     codex: CodexSettings
     grok: GrokSettings
+    opencode: OpenCodeSettings
 
     def state_home(self, app: str) -> Path:
         values = {
             "claude": self.claude.home,
             "codex": self.codex.home,
             "grok": self.grok.home,
+            "opencode": self.opencode.home,
         }
         try:
             return values[app]
@@ -197,6 +210,11 @@ def _resolve_bool(value: object, key: str) -> bool:
 
 def _get(config: Dynaconf, key: str) -> object:
     return config.get(key)
+
+
+def _get_or_default(config: Dynaconf, key: str, default: object) -> object:
+    value = _get(config, key)
+    return default if value is None else value
 
 
 def load_settings(project_root: Path | None = None) -> AppSettings:
@@ -298,6 +316,33 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
                     config,
                     "apps.grok.visibility.installed_plugins",
                 ),
+            ),
+        ),
+        opencode=OpenCodeSettings(
+            home=_resolve_path(
+                root,
+                _get_or_default(config, "apps.opencode.home", "data/opencode"),
+                "apps.opencode.home",
+            ),
+            user_home=_resolve_optional_user_home(
+                root,
+                _get(config, "apps.opencode.user_home"),
+                "apps.opencode.user_home",
+                ".config/opencode",
+            ),
+            user_data_home=_resolve_optional_user_home(
+                root,
+                _get(config, "apps.opencode.user_data_home"),
+                "apps.opencode.user_data_home",
+                ".local/share/opencode",
+            ),
+            permission_mode=_resolve_non_empty_string(
+                _get_or_default(config, "apps.opencode.permission_mode", "allow"),
+                "apps.opencode.permission_mode",
+            ),
+            always_approve=_resolve_bool(
+                _get_or_default(config, "apps.opencode.always_approve", False),
+                "apps.opencode.always_approve",
             ),
         ),
     )

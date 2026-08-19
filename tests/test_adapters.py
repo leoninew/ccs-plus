@@ -11,6 +11,7 @@ from ccs_plus.domain import (
     CodexRuntime,
     GrokRuntime,
     NewProvider,
+    OpenCodeRuntime,
     Provider,
     ProviderError,
 )
@@ -43,10 +44,22 @@ def test_build_claude_provider_keeps_effort_in_cc_switch_shape() -> None:
         (AppKind.CLAUDE, ClaudeRuntime),
         (AppKind.CODEX, CodexRuntime),
         (AppKind.GROK, GrokRuntime),
+        (AppKind.OPENCODE, OpenCodeRuntime),
     ],
 )
 def test_runtime_uses_an_app_specific_type(app: AppKind, runtime_type: type[object]) -> None:
-    runtime = runtime_from_provider(build_provider(_new_value(app), _CODEX))
+    value = _new_value(app)
+    if app is AppKind.OPENCODE:
+        value = NewProvider(
+            app=app,
+            name="Example Provider",
+            endpoint="https://api.example.test/v1",
+            api_key="test-secret-key",
+            model="custom/example-model",
+            effort=None,
+            notes=None,
+        )
+    runtime = runtime_from_provider(build_provider(value, _CODEX))
 
     assert isinstance(runtime, runtime_type)
 
@@ -140,15 +153,58 @@ wire_api = "chat"
         runtime_from_provider(provider)
 
 
+def test_opencode_runtime_parses_cc_switch_native_provider_shape() -> None:
+    provider = Provider(
+        id="nunu-grok",
+        app=AppKind.OPENCODE,
+        name="NuNu-grok",
+        settings_config={
+            "npm": "@ai-sdk/openai-compatible",
+            "options": {
+                "baseURL": "https://api.example.test/v1",
+                "apiKey": "secret-key",
+                "setCacheKey": True,
+            },
+            "models": {"grok-4.5": {"name": "grok-4.5"}},
+        },
+        endpoints=(),
+        category=None,
+        created_at=None,
+        notes=None,
+        is_current=False,
+    )
+
+    runtime = runtime_from_provider(provider)
+
+    assert isinstance(runtime, OpenCodeRuntime)
+    assert runtime.endpoint == "https://api.example.test/v1"
+    assert runtime.api_key == "secret-key"
+    assert runtime.model == "nunu-grok/grok-4.5"
+    display = display_configuration(provider)
+    assert display.endpoint == "https://api.example.test/v1"
+    assert display.model == "nunu-grok/grok-4.5"
+
+
 @pytest.mark.parametrize("app", list(AppKind))
 def test_display_configuration_uses_the_active_settings_config_route(app: AppKind) -> None:
-    provider = build_provider(_new_value(app), _CODEX)
+    value = _new_value(app)
+    if app is AppKind.OPENCODE:
+        value = NewProvider(
+            app=app,
+            name="Example Provider",
+            endpoint="https://api.example.test/v1",
+            api_key="test-secret-key",
+            model="custom/example-model",
+            effort=None,
+            notes=None,
+        )
+    provider = build_provider(value, _CODEX)
     provider = Provider(**{**provider.__dict__, "endpoints": ("https://stale.example.test/v1",)})
 
     display = display_configuration(provider)
 
     assert display.endpoint == "https://api.example.test/v1"
-    assert display.model == "example-model"
+    assert display.model in {"example-model", "custom/example-model"}
     assert display.effort is None
 
 

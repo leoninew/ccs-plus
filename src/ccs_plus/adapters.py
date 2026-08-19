@@ -16,6 +16,7 @@ from ccs_plus.domain import (
     CodexRuntime,
     GrokRuntime,
     NewProvider,
+    OpenCodeRuntime,
     Provider,
     ProviderDisplay,
     ProviderError,
@@ -73,11 +74,25 @@ class GrokProviderAdapter(ProviderAdapter):
         return _registry_display(provider)
 
 
+class OpenCodeProviderAdapter(ProviderAdapter):
+    def new_settings(self, value: NewProvider, codex: CodexAppConfig) -> dict[str, Any]:
+        return _opencode_settings(value)
+
+    def runtime(self, provider: Provider) -> RuntimeConfig:
+        if provider.is_official:
+            return OpenCodeRuntime(provider, None, None, None, None)
+        return _opencode_runtime(provider)
+
+    def display(self, provider: Provider) -> ProviderDisplay:
+        return _opencode_display(provider)
+
+
 def provider_adapter_for(app: AppKind) -> ProviderAdapter:
     adapters: dict[AppKind, ProviderAdapter] = {
         AppKind.CLAUDE: ClaudeProviderAdapter(),
         AppKind.CODEX: CodexProviderAdapter(),
         AppKind.GROK: GrokProviderAdapter(),
+        AppKind.OPENCODE: OpenCodeProviderAdapter(),
     }
     return adapters[app]
 
@@ -298,6 +313,97 @@ def _registry_display(provider: Provider) -> ProviderDisplay:
         model=_as_string(_value(model_config.get("model"))) or model_name,
         effort=_as_string(_value(models.get("default_reasoning_effort"))),
     )
+
+
+def _opencode_settings(value: NewProvider) -> dict[str, Any]:
+    # Store in cc-switch-compatible OpenCode provider shape (npm + options + models).
+    model = value.model.strip()
+    provider_id = "custom"
+    model_id = model
+    if "/" in model:
+        provider_id, model_id = model.split("/", 1)
+        provider_id = provider_id.strip() or "custom"
+        model_id = model_id.strip() or model
+    return {
+        "npm": "@ai-sdk/openai-compatible",
+        "options": {
+            "baseURL": value.endpoint.strip(),
+            "apiKey": value.api_key,
+        },
+        "models": {model_id: {"name": model_id}},
+        # ccs-plus extras (ignored by cc-switch UI, used by our runtime fallbacks)
+        "model": f"{provider_id}/{model_id}",
+        "provider_id": provider_id,
+        "effort": value.effort.strip() if value.effort else None,
+        "permission_mode": None,
+        "always_approve": None,
+    }
+
+
+def _opencode_runtime(provider: Provider) -> OpenCodeRuntime:
+    endpoint, api_key, model, effort, permission_mode, always_approve = _parse_opencode_config(
+        provider
+    )
+    _require(endpoint, "OpenCode endpoint")
+    _require(api_key, "OpenCode API key")
+    _require(model, "OpenCode model")
+    return OpenCodeRuntime(
+        provider=provider,
+        endpoint=endpoint,
+        api_key=api_key,
+        model=model,
+        effort=effort,
+        permission_mode=permission_mode,
+        always_approve=always_approve,
+    )
+
+
+def _opencode_display(provider: Provider) -> ProviderDisplay:
+    endpoint, _api_key, model, effort, _permission, _always = _parse_opencode_config(provider)
+    return ProviderDisplay(endpoint=endpoint, model=model, effort=effort)
+
+
+def _parse_opencode_config(
+    provider: Provider,
+) -> tuple[str | None, str | None, str | None, str | None, str | None, bool | None]:
+    """Parse ccs-plus or cc-switch native OpenCode provider settings_config.
+
+    cc-switch stores the OpenCode provider block itself::
+
+        {"npm": "...", "options": {"baseURL", "apiKey"}, "models": {"id": {...}}}
+
+    ccs-plus also accepts a flat shape with endpoint/api_key/model.
+    """
+    config = provider.settings_config
+    options = config.get("options")
+    options_map = options if isinstance(options, Mapping) else {}
+
+    endpoint = (
+        _as_string(config.get("endpoint"))
+        or _as_string(options_map.get("baseURL"))
+        or _as_string(options_map.get("baseUrl"))
+    )
+    api_key = (
+        _as_string(config.get("api_key"))
+        or _as_string(options_map.get("apiKey"))
+        or _as_string(options_map.get("api_key"))
+    )
+
+    model = _as_string(config.get("model"))
+    if not model:
+        models = config.get("models")
+        model_id: str | None = None
+        if isinstance(models, Mapping) and models:
+            first = next(iter(models.keys()))
+            model_id = _as_string(first)
+        provider_id = _as_string(config.get("provider_id")) or provider.id
+        if model_id:
+            model = f"{provider_id}/{model_id}"
+
+    effort = _as_string(config.get("effort"))
+    permission_mode = _as_string(config.get("permission_mode"))
+    always_approve = _as_bool(config.get("always_approve"))
+    return endpoint, api_key, model, effort, permission_mode, always_approve
 
 
 def _parse_toml(provider: Provider, app_name: str) -> TOMLDocument:

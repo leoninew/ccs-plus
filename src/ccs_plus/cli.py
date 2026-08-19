@@ -29,9 +29,10 @@ RUN_APP_PREFIXES = {
     "c": AppKind.CLAUDE,
     "x": AppKind.CODEX,
     "g": AppKind.GROK,
+    "o": AppKind.OPENCODE,
 }
 RUN_PREFIXES = {app: prefix for prefix, app in RUN_APP_PREFIXES.items()}
-RUN_SELECTOR = re.compile(r"(?P<app>[cxg])(?P<number>[1-9][0-9]*)", re.IGNORECASE)
+RUN_SELECTOR = re.compile(r"(?P<app>[cxgo])(?P<number>[1-9][0-9]*)", re.IGNORECASE)
 APP_NAMES = frozenset(app.value for app in AppKind)
 
 
@@ -75,7 +76,8 @@ def _parse_provider_data_arguments(
     """Parse ``[app] [path]`` while retaining export's legacy path-only form."""
     path_name = path_label.replace(" ", "-")
     path_usage = f"<{path_name}>" if path_required else f"[{path_name}]"
-    usage = f"Usage: ccsp provider {command} [claude|codex|grok] {path_usage}"
+    app_choices = "|".join(app.value for app in AppKind)
+    usage = f"Usage: ccsp provider {command} [{app_choices}] {path_usage}"
     if len(arguments) > 2:
         raise click.UsageError(usage)
 
@@ -293,7 +295,7 @@ def launch_provider(
     effort_override: str | None,
     verbose: bool,
 ) -> None:
-    """Launch Claude, Codex, or Grok using one cc-switch provider."""
+    """Launch Claude, Codex, Grok, or OpenCode using one cc-switch provider."""
     try:
         if verbose:
             _configure_verbose_logging()
@@ -317,7 +319,7 @@ def launch_provider(
 @click.argument("target")
 @click.option("-v", "--verbose", is_flag=True, help="Log launch details to standard error.")
 def run_provider(target: str, verbose: bool) -> None:
-    """Launch a provider listed as c1, x1, or g1."""
+    """Launch a provider listed as c1, x1, g1, or o1."""
     try:
         if verbose:
             _configure_verbose_logging()
@@ -369,6 +371,8 @@ def _execute_plan(plan: LaunchPlan, settings: AppSettings, history: LaunchHistor
         resume=plan.session,
         approval_policy=plan.approval_policy,
         sandbox_mode=plan.sandbox_mode,
+        permission_mode=plan.permission_mode,
+        always_approve=plan.always_approve,
     )
     history.record_launch(plan.provider)
     exit_code = launch(spec)
@@ -463,7 +467,7 @@ def _parse_run_target(value: str) -> tuple[AppKind, int]:
     match = RUN_SELECTOR.fullmatch(value.strip())
     if match is None:
         raise ProviderError(
-            "Run target must be c, x, or g followed by a positive provider number "
+            "Run target must be c, x, g, or o followed by a positive provider number "
             "(for example: x1)."
         )
     return RUN_APP_PREFIXES[match["app"].lower()], int(match["number"])

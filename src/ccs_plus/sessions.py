@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
@@ -11,7 +12,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from ccs_plus.domain import AppKind
-from ccs_plus.home_visibility import CodexHomeVisibility
+from ccs_plus.home_visibility import CodexHomeVisibility, OpenCodeHomeVisibility
 from ccs_plus.settings import AppSettings
 
 logger = logging.getLogger(__name__)
@@ -59,11 +60,25 @@ class GrokSessionReader(SessionReader):
         return _list_prompt_histories(home, app)
 
 
+class OpenCodeSessionReader(SessionReader):
+    def prepare(self, settings: AppSettings) -> None:
+        OpenCodeHomeVisibility(
+            state_home=settings.opencode.home,
+            user_home=settings.opencode.user_home,
+            user_data_home=settings.opencode.user_data_home,
+            is_official=True,
+        ).expose_data()
+
+    def list(self, home: Path, app: AppKind) -> list[Session]:
+        return _list_opencode_db(home, app)
+
+
 def session_reader_for(app: AppKind) -> SessionReader:
     readers: dict[AppKind, SessionReader] = {
         AppKind.CODEX: CodexSessionReader(),
         AppKind.CLAUDE: ClaudeSessionReader(),
         AppKind.GROK: GrokSessionReader(),
+        AppKind.OPENCODE: OpenCodeSessionReader(),
     }
     return readers[app]
 
@@ -166,7 +181,9 @@ def _newest_files(paths: Iterable[Path], *, limit: int) -> list[Path]:
                 ranked.append((path.stat().st_mtime, path))
         except OSError:
             continue
-    ranked.sort(key=lambda item: item[0], reverse=True)
+    # Filesystems may give several rollouts the same mtime; use the filename's
+    # embedded timestamp/sequence as a deterministic tie-breaker.
+    ranked.sort(key=lambda item: (item[0], str(item[1])), reverse=True)
     return [path for _, path in ranked[:limit]]
 
 
@@ -328,6 +345,59 @@ def _parse_iso(value: str) -> float | None:
         return datetime.fromisoformat(text).timestamp()
     except ValueError:
         return None
+
+
+def _list_opencode_db(home: Path, app: AppKind) -> list[Session]:
+    """Read sessions from OpenCode SQLite under XDG data home."""
+    db_path = home / "share" / "opencode" / "opencode.db"
+    if not db_path.is_file():
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.Error as exc:
+        logger.warning("Unable to open OpenCode db %s: %s", db_path, exc)
+        return []
+    try:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            """
+            SELECT id, title, directory, time_updated, time_archived
+            FROM session
+            WHERE time_archived IS NULL
+            ORDER BY time_updated DESC
+            LIMIT ?
+            """,
+            (_MAX_SESSIONS,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        logger.warning("Unable to query OpenCode sessions: %s", exc)
+        return []
+    finally:
+        conn.close()
+
+    sessions: list[Session] = []
+    for row in rows:
+        session_id = row["id"]
+        if not isinstance(session_id, str) or not session_id:
+            continue
+        title = row["title"] if isinstance(row["title"], str) else session_id
+        cwd = row["directory"] if isinstance(row["directory"], str) else ""
+        raw_ts = row["time_updated"]
+        if isinstance(raw_ts, (int, float)):
+            # OpenCode stores ms epoch.
+            timestamp = float(raw_ts) / 1000.0 if raw_ts > 1_000_000_000_000 else float(raw_ts)
+        else:
+            timestamp = db_path.stat().st_mtime
+        sessions.append(
+            Session(
+                app=app,
+                session_id=session_id,
+                title=_clip(title or Path(cwd).name or session_id[:8]),
+                cwd=cwd,
+                modified_at=timestamp,
+            )
+        )
+    return sessions
 
 
 def _clip(text: str) -> str:

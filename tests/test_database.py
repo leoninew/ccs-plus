@@ -43,6 +43,15 @@ def test_add_list_and_delete_cascades_endpoints(database_path) -> None:
         repository.get(AppKind.CODEX, provider.id)
 
 
+def test_get_by_name_resolves_synthetic_opencode_official(database_path) -> None:
+    provider = ProviderRepository(database_path).get_by_name(
+        AppKind.OPENCODE, " opencode official "
+    )
+
+    assert provider.id == "opencode-official"
+    assert provider.is_official is True
+
+
 def test_list_stored_keeps_insertion_order_while_list_re_sorts(database_path) -> None:
     repository = ProviderRepository(database_path)
     codex = _new_provider(AppKind.CODEX)
@@ -52,8 +61,13 @@ def test_list_stored_keeps_insertion_order_while_list_re_sorts(database_path) ->
 
     # list_stored() follows the physical (rowid) order in which rows were added.
     assert [provider.id for provider in repository.list_stored()] == [codex.id, claude.id]
-    # list() re-sorts by app_type, so claude surfaces before codex.
-    assert [provider.id for provider in repository.list()] == [claude.id, codex.id]
+    # list() re-sorts by app_type, so claude surfaces before codex; synthetic
+    # OpenCode official is appended when missing from the database.
+    assert [provider.id for provider in repository.list()] == [
+        claude.id,
+        codex.id,
+        "opencode-official",
+    ]
 
 
 def test_add_many_rolls_back_when_a_later_provider_conflicts(database_path) -> None:
@@ -65,7 +79,7 @@ def test_add_many_rolls_back_when_a_later_provider_conflicts(database_path) -> N
     with pytest.raises(ProviderError, match="already exists"):
         repository.add_many((imported, existing))
 
-    assert [provider.id for provider in repository.list()] == [existing.id]
+    assert [provider.id for provider in repository.list()] == [existing.id, "opencode-official"]
 
 
 def test_delete_rejects_official_provider(database_path) -> None:
@@ -101,7 +115,11 @@ def test_reset_non_official_deletes_only_custom_providers(database_path) -> None
         )
 
     assert repository.reset_non_official([AppKind.CLAUDE]) == 1
-    assert [provider.id for provider in repository.list()] == ["claude-official", codex.id]
+    assert [provider.id for provider in repository.list()] == [
+        "claude-official",
+        codex.id,
+        "opencode-official",
+    ]
     with sqlite3.connect(database_path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM provider_endpoints").fetchone()[0] == 1
 

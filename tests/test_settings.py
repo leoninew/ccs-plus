@@ -18,11 +18,17 @@ def test_settings_default_homes_use_local_data(settings_root) -> None:
     assert settings.grok.sandbox_mode == "workspace"
     assert settings.grok.always_approve is True
     assert settings.grok.home == settings_root / "data" / "grok"
+    assert settings.opencode.home == settings_root / "data" / "opencode"
+    assert settings.opencode.permission_mode == "allow"
+    assert settings.opencode.always_approve is False
     assert settings.state_home("codex") == settings.codex.home
+    assert settings.state_home("opencode") == settings.opencode.home
     # user_home is not in settings.yaml; defaults to Path.home() / ".claude"|".codex"
     assert settings.claude.user_home == Path.home() / ".claude"
     assert settings.codex.user_home == Path.home() / ".codex"
     assert settings.grok.user_home == Path.home() / ".grok"
+    assert settings.opencode.user_home == Path.home() / ".config" / "opencode"
+    assert settings.opencode.user_data_home == Path.home() / ".local" / "share" / "opencode"
     assert settings.claude.visibility.mcp_key == "mcpServers"
     assert settings.claude.visibility.plugins.copy_names == (
         ".last_inuse_sweep",
@@ -107,6 +113,10 @@ def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None
         .replace(
             "    home: data/grok\n",
             "    home: data/grok\n    user_home: custom/grok-user\n",
+        )
+        .replace(
+            "    home: data/opencode\n",
+            "    home: data/opencode\n    user_home: custom/opencode-user\n",
         ),
         encoding="utf-8",
     )
@@ -115,6 +125,7 @@ def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None
     assert settings.claude.user_home == settings_root / "custom" / "claude-user"
     assert settings.codex.user_home == settings_root / "custom" / "codex-user"
     assert settings.grok.user_home == settings_root / "custom" / "grok-user"
+    assert settings.opencode.user_home == settings_root / "custom" / "opencode-user"
 
 
 def test_blank_user_home_keeps_builtin_default(settings_root, monkeypatch) -> None:
@@ -234,3 +245,15 @@ def test_settings_rejects_missing_codex_session_model_provider(settings_root) ->
 
     with pytest.raises(ProviderError, match=r"apps\.codex\.session_model_provider"):
         load_settings(settings_root)
+
+
+def test_settings_keeps_defaults_when_opencode_block_is_missing(settings_root) -> None:
+    path = settings_root / "settings.yaml"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    path.write_text("\n".join(lines[: lines.index("  opencode:")]) + "\n", encoding="utf-8")
+
+    settings = load_settings(settings_root)
+
+    assert settings.opencode.home == settings_root / "data" / "opencode"
+    assert settings.opencode.permission_mode == "allow"
+    assert settings.opencode.always_approve is False

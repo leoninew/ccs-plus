@@ -18,7 +18,14 @@ import portalocker
 import tomlkit
 from tomlkit import TOMLDocument
 
-from ccs_plus.domain import ClaudeRuntime, CodexRuntime, GrokRuntime, ProviderError, RuntimeConfig
+from ccs_plus.domain import (
+    ClaudeRuntime,
+    CodexRuntime,
+    GrokRuntime,
+    OpenCodeRuntime,
+    ProviderError,
+    RuntimeConfig,
+)
 from ccs_plus.settings import AppSettings, EntryVisibilitySettings
 
 logger = logging.getLogger(__name__)
@@ -352,7 +359,41 @@ def home_visibility_for(
             hooks=settings.grok.visibility.hooks,
             installed_plugins=settings.grok.visibility.installed_plugins,
         )
+    if isinstance(runtime, OpenCodeRuntime):
+        return OpenCodeHomeVisibility(
+            state_home=state_home,
+            user_home=settings.opencode.user_home,
+            is_official=runtime.provider.is_official,
+            user_data_home=settings.opencode.user_data_home,
+        )
     raise ProviderError(f"Unsupported home visibility runtime: {type(runtime).__name__}.")
+
+
+@dataclass(frozen=True)
+class OpenCodeHomeVisibility(HomeVisibility):
+    """Link user OpenCode skills/plugins into the isolated config tree."""
+
+    is_official: bool = False
+    user_data_home: Path | None = None
+
+    def apply(self) -> None:
+        if self.user_home is not None:
+            # User config lives at ~/.config/opencode; isolated at state/config/opencode.
+            target_config = self.state_home / "config" / "opencode"
+            target_config.mkdir(parents=True, exist_ok=True)
+            for name in ("skills", "plugins", "agents", "commands", "tools", "themes"):
+                link_user_entries(self.user_home / name, target_config / name)
+        if self.is_official:
+            self.expose_data()
+
+    def expose_data(self) -> None:
+        """Expose existing official auth and session state to the isolated home."""
+        if self.user_data_home is None:
+            return
+        target = self.state_home / "share" / "opencode"
+        if _path_key(target) == _path_key(self.user_data_home):
+            return
+        link_user_entries(self.user_data_home, target)
 
 
 def link_user_entries(

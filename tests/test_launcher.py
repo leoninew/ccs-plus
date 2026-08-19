@@ -37,6 +37,15 @@ def _provider(
     endpoint: str = "https://api.example.test/v1",
     model: str = "example-model",
 ):
+    if app is AppKind.OPENCODE and model == "example-model":
+        model = "custom/example-model"
+    effort = None
+    if app is AppKind.GROK:
+        effort = "xhigh"
+    elif app is AppKind.OPENCODE:
+        effort = "high"
+    else:
+        effort = "high"
     return build_provider(
         NewProvider(
             app=app,
@@ -44,7 +53,7 @@ def _provider(
             endpoint=endpoint,
             api_key="launch-secret-key",
             model=model,
-            effort="high" if app is not AppKind.GROK else "xhigh",
+            effort=effort,
             notes=None,
         ),
         _CODEX,
@@ -71,6 +80,7 @@ def test_launch_specs_set_global_proxy_and_clear_inherited_values(
         (AppKind.CLAUDE, ("--permission-mode", "bypassPermissions")),
         (AppKind.CODEX, ("--profile",)),
         (AppKind.GROK, ("--sandbox", "workspace", "--always-approve")),
+        (AppKind.OPENCODE, ()),
     ],
 )
 def test_launch_specs_keep_secret_out_of_argv_and_use_expected_home(
@@ -89,6 +99,15 @@ def test_launch_specs_keep_secret_out_of_argv_and_use_expected_home(
     assert "launch-secret-key" not in spec.argv
     assert all(argument in spec.argv for argument in required_args)
     state_home = settings.state_home(app.value)
+    if app is AppKind.OPENCODE:
+        assert spec.env["XDG_DATA_HOME"] == str(state_home / "share")
+        assert spec.env["XDG_CONFIG_HOME"] == str(state_home / "config")
+        assert "launch-secret-key" in spec.env["OPENCODE_CONFIG_CONTENT"]
+        assert '"permission":"allow"' in spec.env["OPENCODE_CONFIG_CONTENT"]
+        assert spec.argv[spec.argv.index("--variant") + 1] == "high"
+        assert "--auto" not in spec.argv
+        assert spec.cwd == tmp_path.resolve()
+        return
     state_keys = {
         AppKind.CLAUDE: "CLAUDE_CONFIG_DIR",
         AppKind.CODEX: "CODEX_HOME",
@@ -272,6 +291,20 @@ def test_claude_launch_uses_configured_permission_mode(tmp_path, monkeypatch) ->
     assert "--dangerously-skip-permissions" not in spec.argv
 
 
+def test_claude_launch_honors_permission_mode_override(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-claude")
+    settings = make_app_settings(tmp_path, claude_permission_mode="bypassPermissions")
+
+    spec = build_launch_spec(
+        _provider(AppKind.CLAUDE),
+        settings,
+        tmp_path,
+        permission_mode="plan",
+    )
+
+    assert spec.argv[-2:] == ("--permission-mode", "plan")
+
+
 def test_grok_launch_uses_configured_permission_settings(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-grok")
     settings = make_app_settings(
@@ -284,6 +317,26 @@ def test_grok_launch_uses_configured_permission_settings(tmp_path, monkeypatch) 
 
     assert "--sandbox" in spec.argv
     assert spec.argv[spec.argv.index("--sandbox") + 1] == "restricted"
+    assert "--always-approve" not in spec.argv
+
+
+def test_grok_launch_honors_sandbox_and_always_approve_override(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-grok")
+    settings = make_app_settings(
+        tmp_path,
+        grok_sandbox_mode="workspace",
+        grok_always_approve=True,
+    )
+
+    spec = build_launch_spec(
+        _provider(AppKind.GROK),
+        settings,
+        tmp_path,
+        sandbox_mode="read-only",
+        always_approve=False,
+    )
+
+    assert spec.argv[spec.argv.index("--sandbox") + 1] == "read-only"
     assert "--always-approve" not in spec.argv
 
 
@@ -748,6 +801,7 @@ def test_launch_from_user_home_disables_home_visibility(
         AppKind.CLAUDE: settings.claude.user_home,
         AppKind.CODEX: settings.codex.user_home,
         AppKind.GROK: settings.grok.user_home,
+        AppKind.OPENCODE: settings.opencode.user_home,
     }
     user_home = user_homes[app]
     assert user_home is not None
@@ -764,7 +818,10 @@ command = "user"
     spec = build_launch_spec(_provider(app), settings, tmp_path)
 
     state_home = settings.state_home(app.value)
-    assert not (state_home / "skills" / "shared-skill").exists()
+    if app is AppKind.OPENCODE:
+        assert not (state_home / "config" / "opencode" / "skills" / "shared-skill").exists()
+    else:
+        assert not (state_home / "skills" / "shared-skill").exists()
     if app is AppKind.CODEX:
         profile = spec.argv[spec.argv.index("--profile") + 1]
         document = tomlkit.parse(
