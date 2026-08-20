@@ -12,8 +12,7 @@ from typing import Any, Literal
 
 from prompt_toolkit.application import Application
 from prompt_toolkit.application.current import get_app
-from prompt_toolkit.completion import PathCompleter
-from prompt_toolkit.document import Document
+from prompt_toolkit.data_structures import Point
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import FormattedText, StyleAndTextTuples
 from prompt_toolkit.key_binding import KeyBindings
@@ -31,8 +30,7 @@ from prompt_toolkit.layout.containers import FloatContainer
 from prompt_toolkit.layout.dimension import Dimension as D
 from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
-from prompt_toolkit.validation import ValidationError, Validator
-from prompt_toolkit.widgets import Box, TextArea
+from prompt_toolkit.widgets import Box
 
 from ccs_plus.adapters import display_configuration, runtime_from_provider
 from ccs_plus.domain import (
@@ -66,9 +64,11 @@ STYLE = Style.from_dict(
         "frame.scroll": "#8b949e",
         "frame.active.scroll": "#58a6ff bold",
         "item": "#c9d1d9",
-        "item.selected": "bg:#21262d #f0f6fc bold",
+        "item.selected": "bg:#3b4554 #ffffff bold",
         "item.focused": "bg:#1f6feb #ffffff bold",
         "item.focused-sub": "bg:#1f6feb #dbeafe",
+        "item.marker.selected": "bg:#3b4554 #58a6ff bold",
+        "item.marker.focused": "bg:#1f6feb #ffffff bold",
         "item.muted": "#8b949e",
         "badge.claude": "bg:#d97706 #0a0e14 bold",
         "badge.codex": "bg:#10b981 #0a0e14 bold",
@@ -294,21 +294,6 @@ def run_launcher(
     return screen.run()
 
 
-class _ExistingDirectoryValidator(Validator):
-    def validate(self, document: Document) -> None:
-        text = document.text.strip()
-        if not text:
-            return
-        path = Path(text).expanduser()
-        if not path.is_absolute():
-            path = (Path.cwd() / path).resolve()
-        if not path.is_dir():
-            raise ValidationError(
-                message=f"Directory does not exist: {path}",
-                cursor_position=len(document.text),
-            )
-
-
 class _ScrollListControl(FormattedTextControl):
     """List control: app-level keys; mouse click + wheel handled here."""
 
@@ -319,10 +304,17 @@ class _ScrollListControl(FormattedTextControl):
         on_click_row: Callable[[int], None],
         on_scroll: Callable[[int], None],
         on_activate: Callable[[], None],
+        get_cursor_position: Callable[[], Point | None] | None = None,
     ) -> None:
         # focusable=True so the window reliably receives mouse wheel events.
         # Arrow keys are still handled by eager app-level bindings.
-        super().__init__(get_text, focusable=True, show_cursor=False, modal=False)
+        super().__init__(
+            get_text,
+            focusable=True,
+            show_cursor=False,
+            modal=False,
+            get_cursor_position=get_cursor_position,
+        )
         self._on_click_row = on_click_row
         self._on_scroll = on_scroll
         self._on_activate = on_activate
@@ -451,21 +443,6 @@ class _LaunchScreen:
         self.filter_mode = False
         # Default: only sessions for the launch/working directory (like native CLIs).
         self.sessions_scope: SessionScope = "this_dir"
-
-        self.dir_area = TextArea(
-            text=str(default_cwd),
-            multiline=False,
-            completer=PathCompleter(only_directories=True, expanduser=True),
-            validator=_ExistingDirectoryValidator(),
-            style="class:text-area",
-            height=1,
-            focusable=Condition(
-                lambda: (
-                    self.selected_session is None and self.focus == "dir" and not self.filter_mode
-                )
-            ),
-        )
-        self.dir_buffer = self.dir_area.buffer
 
         self._focus_sink = Window(
             content=FormattedTextControl("", focusable=True, show_cursor=False),
@@ -643,18 +620,7 @@ class _LaunchScreen:
         return sessions
 
     def _session_scope_cwd(self) -> Path:
-        """Directory used for the 'this dir' session scope.
-
-        Prefer a valid path from the directory field while creating a new
-        session; otherwise fall back to the launcher's default cwd.
-        """
-        if self.selected_session is None:
-            text = self.dir_buffer.text.strip()
-            if text:
-                path = Path(text).expanduser()
-                path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
-                if path.is_dir():
-                    return path
+        """Directory used for the 'this dir' session scope."""
         return self.default_cwd
 
     def _invalidate_provider_filter(self) -> None:
@@ -713,11 +679,8 @@ class _LaunchScreen:
         self._invalidate_session_filter()
         self._sync_provider_index()
         self._sync_permission_selection()
-        self._write_directory(str(self.default_cwd))
         self.status = ""
         self.status_error = False
-        if self.focus == "dir" and self.selected_session is not None:
-            self.focus = "sessions"
         self._ensure_provider_visible()
         self._ensure_session_visible()
         self._sync_layout_focus()
@@ -725,59 +688,31 @@ class _LaunchScreen:
     def _set_session(self, index: int) -> None:
         max_index = max(0, self._session_entry_count() - 1)
         self.session_index = max(0, min(index, max_index))
-        if self.selected_session is not None and self.focus == "dir":
-            self.focus = "sessions"
-            self._sync_layout_focus()
         self._ensure_session_visible()
 
-    def _write_directory(self, text: str) -> None:
-        if self.dir_buffer.text == text:
-            return
-        self.dir_buffer.set_document(Document(text, len(text)), bypass_readonly=True)
-        if self.sessions_scope == "this_dir":
-            self._invalidate_session_filter()
-            self._clamp_session_index()
-
     def _focus_order(self) -> list[str]:
-        order = ["app", "provider"]
-        if self.selected_session is None:
-            order.append("dir")
-        order.append("permissions")
-        order.extend(["sessions", "buttons"])
-        return order
+        return ["app", "sessions", "provider", "permissions", "buttons"]
 
     def _set_focus(self, pane: str) -> None:
         order = self._focus_order()
         if pane not in order:
             pane = order[0]
-        previous = self.focus
         if pane not in {"provider", "sessions"}:
             self.filter_mode = False
         self.focus = pane
-        if previous == "dir" and pane != "dir" and self.sessions_scope == "this_dir":
-            self._invalidate_session_filter()
-            self._clamp_session_index()
         self._sync_layout_focus()
 
     def _move_focus(self, delta: int) -> None:
         self.filter_mode = False
         order = self._focus_order()
-        previous = self.focus
         if self.focus not in order:
             self.focus = order[0]
         else:
             index = order.index(self.focus)
             self.focus = order[(index + delta) % len(order)]
-        if previous == "dir" and self.focus != "dir" and self.sessions_scope == "this_dir":
-            self._invalidate_session_filter()
-            self._clamp_session_index()
         self._sync_layout_focus()
 
     def _sync_layout_focus(self) -> None:
-        if self.focus == "dir" and self.selected_session is None and not self.filter_mode:
-            with contextlib.suppress(Exception):
-                self.application.layout.focus(self.dir_area)
-            return
         target = {
             "app": getattr(self, "_app_window", None),
             "provider": getattr(self, "_provider_window", None),
@@ -855,11 +790,6 @@ class _LaunchScreen:
             return default
         return height
 
-    def _resume_directory_text(self) -> StyleAndTextTuples:
-        session = self.selected_session
-        path = _short_path(session.cwd) if session and session.cwd else "—"
-        return [("class:item.muted", f" {path}\n")]
-
     def _clamp_provider_index(self) -> None:
         providers = self.filtered_providers
         if not providers:
@@ -936,17 +866,12 @@ class _LaunchScreen:
             self.status_error = True
             return
         session = self.selected_session
-        if session is not None:
-            cwd_text = session.cwd or str(self.default_cwd)
-        else:
-            cwd_text = self.dir_buffer.text.strip() or str(self.default_cwd)
+        cwd_text = session.cwd if session is not None and session.cwd else str(self.default_cwd)
         path = Path(cwd_text).expanduser()
         path = (Path.cwd() / path).resolve() if not path.is_absolute() else path.resolve()
         if not path.is_dir():
             self.status = f"Directory does not exist: {path}"
             self.status_error = True
-            if session is None:
-                self._set_focus("dir")
             return
         approval: str | None = None
         sandbox: str | None = None
@@ -977,6 +902,11 @@ class _LaunchScreen:
         name = provider.name if provider else "—"
         mode = "resume" if self.selected_session else "new"
         app = self.current_app
+        cwd = (
+            self.selected_session.cwd
+            if self.selected_session and self.selected_session.cwd
+            else str(self.default_cwd)
+        )
         badge_style = f"class:badge.{app.style_key}"
         return [
             ("class:header.brand", " ccs-plus "),
@@ -985,7 +915,7 @@ class _LaunchScreen:
             ("class:header.accent", f" {app.display_name}"),
             ("class:header", f" · {name} · "),
             ("class:header.mode", mode),
-            ("class:header", " "),
+            ("class:header", f" · cwd: {_short_path(cwd)} "),
         ]
 
     def _footer_text(self) -> StyleAndTextTuples:
@@ -999,7 +929,9 @@ class _LaunchScreen:
             ("class:footer.key", "↑↓"),
             ("class:footer", " · "),
             ("class:footer.key", "enter"),
-            ("class:footer", " · "),
+            ("class:footer", " nav · "),
+            ("class:footer.key", "ctrl-enter"),
+            ("class:footer", " launch · "),
             ("class:footer.key", "/"),
             ("class:footer", " filter · "),
             ("class:footer.key", "a"),
@@ -1048,8 +980,6 @@ class _LaunchScreen:
                 start = self._session_scroll + 1
                 end = min(total, self._session_scroll + capacity)
                 filt += f" · {start}-{end}/{total}"
-        elif pane == "dir" and self.selected_session is not None:
-            label = "session cwd"
         if self.focus == pane:
             suffix = " · filter" if self.filter_mode and pane in {"provider", "sessions"} else ""
             return f" ▶ {label}{filt}{suffix} "
@@ -1153,13 +1083,22 @@ class _LaunchScreen:
         style = self._row_style(focused=focused and selected, selected=selected)
         sub_style = "class:item.focused-sub" if focused and selected else "class:item.muted"
         marker = "▸ " if selected else "  "
-        title_text = f"{marker}{title}\n"
+        marker_style = (
+            "class:item.marker.focused"
+            if focused and selected
+            else "class:item.marker.selected"
+            if selected
+            else style
+        )
+        title_text = f"{title}\n"
         sub_text = f"    {subtitle}\n"
         if mouse_handler is None:
+            lines.append((marker_style, marker))
             lines.append((style, title_text))
             lines.append((sub_style, sub_text))
         else:
             # 3-tuple fragments register per-cell mouse handlers in FormattedTextControl.
+            lines.append((marker_style, marker, mouse_handler))
             lines.append((style, title_text, mouse_handler))
             lines.append((sub_style, sub_text, mouse_handler))
 
@@ -1218,6 +1157,13 @@ class _LaunchScreen:
             row_focused = focused and selected
             style = self._row_style(focused=row_focused, selected=selected)
             marker = "● " if selected else "○ "
+            marker_style = (
+                "class:item.marker.focused"
+                if row_focused
+                else "class:item.marker.selected"
+                if selected
+                else style
+            )
             badge_style = (
                 f"class:badge.{app.style_key}.focused"
                 if row_focused
@@ -1235,7 +1181,7 @@ class _LaunchScreen:
 
             lines.extend(
                 [
-                    (style, f" {marker}", handler),
+                    (marker_style, f" {marker}", handler),
                     (badge_style, f" {app.badge} ", handler),
                     (style, f" {app.display_name}\n", handler),
                 ]
@@ -1292,6 +1238,13 @@ class _LaunchScreen:
             style = self._row_style(focused=focused and selected, selected=selected)
             sub_style = "class:item.focused-sub" if focused and selected else "class:item.muted"
             marker = "● " if selected else "○ "
+            marker_style = (
+                "class:item.marker.focused"
+                if focused and selected
+                else "class:item.marker.selected"
+                if selected
+                else style
+            )
 
             def handler(mouse_event: MouseEvent, entry: int = index) -> object:
                 if mouse_event.event_type != MouseEventType.MOUSE_DOWN:
@@ -1302,7 +1255,8 @@ class _LaunchScreen:
                     get_app().invalidate()
                 return None
 
-            lines.append((style, f" {marker}{preset.label}\n", handler))
+            lines.append((marker_style, f" {marker}", handler))
+            lines.append((style, f"{preset.label}\n", handler))
             lines.append((sub_style, f"    {preset.description}\n", handler))
         return lines
 
@@ -1320,12 +1274,14 @@ class _LaunchScreen:
         *,
         on_click_row: Callable[[int], None],
         on_scroll: Callable[[int], None],
+        get_cursor_position: Callable[[], Point | None],
     ) -> _ScrollListControl:
         return _ScrollListControl(
             get_text,
             on_click_row=on_click_row,
             on_scroll=on_scroll,
             on_activate=lambda: self._set_focus(pane),
+            get_cursor_position=get_cursor_position,
         )
 
     def _build_application(self) -> None:
@@ -1334,24 +1290,28 @@ class _LaunchScreen:
             "sessions",
             on_click_row=self._click_session,
             on_scroll=self._scroll_sessions,
+            get_cursor_position=lambda: Point(x=0, y=self.session_index * _SESSION_ROW),
         )
         app_control = self._make_list_control(
             lambda: FormattedText(self._app_lines()),
             "app",
             on_click_row=self._click_app,
             on_scroll=lambda d: self._navigate(d),
+            get_cursor_position=lambda: Point(x=0, y=self.app_index * _SESSION_ROW),
         )
         provider_control = self._make_list_control(
             lambda: FormattedText(self._provider_lines()),
             "provider",
             on_click_row=self._click_provider,
             on_scroll=self._scroll_providers,
+            get_cursor_position=lambda: Point(x=0, y=self.provider_index * _PROVIDER_ROW),
         )
         permission_control = self._make_list_control(
             lambda: FormattedText(self._permission_lines()),
             "permissions",
             on_click_row=self._click_permission,
             on_scroll=lambda d: self._navigate(d),
+            get_cursor_position=lambda: Point(x=0, y=self.permission_index * _PERMISSION_ROW),
         )
 
         def button_fragments() -> StyleAndTextTuples:
@@ -1433,20 +1393,12 @@ class _LaunchScreen:
             wrap_lines=False,
             always_hide_cursor=True,
             allow_scroll_beyond_bottom=False,
-            # Fixed preferred height so directory show/hide does not reflow peers.
+            # Fixed preferred height so sibling panes do not reflow peers.
             height=D(preferred=12, min=8, max=14),
         )
         self._permission_window = Window(
             content=permission_control,
             height=D(min=8, preferred=12, max=14),
-            always_hide_cursor=True,
-        )
-        # Directory slot always occupies the same height: editable path for new
-        # sessions, locked session cwd label when resuming (no left-column jump).
-        self._dir_window = Box(self.dir_area, padding_left=1, padding_right=1, height=1)
-        self._resume_cwd_window = Window(
-            FormattedTextControl(self._resume_directory_text, focusable=False, show_cursor=False),
-            height=1,
             always_hide_cursor=True,
         )
         self._buttons_window = Window(
@@ -1456,19 +1408,10 @@ class _LaunchScreen:
             align=WindowAlign.CENTER,
         )
 
-        directory_slot = ConditionalContainer(
-            content=self._highlighted_frame(self._dir_window, "dir", "directory"),
-            filter=Condition(lambda: self.selected_session is None),
-            alternative_content=self._highlighted_frame(
-                self._resume_cwd_window, "dir", "session cwd"
-            ),
-        )
-
         left = HSplit(
             [
                 self._highlighted_frame(self._app_window, "app", "app"),
                 self._highlighted_frame(self._provider_window, "provider", "provider"),
-                directory_slot,
                 ConditionalContainer(
                     self._highlighted_frame(self._permission_window, "permissions", "permissions"),
                     filter=Condition(lambda: self.current_app.supports_permission_overrides),
@@ -1476,7 +1419,8 @@ class _LaunchScreen:
                 Box(self._buttons_window, padding=1),
             ],
             padding=0,
-            width=D(min=34, preferred=42),
+            # Keep the sessions pane anchored while content and labels refresh.
+            width=D(min=42, preferred=42, max=42),
         )
         sessions_frame = self._highlighted_frame(self._sessions_window, "sessions", "sessions")
         body = VSplit([left, sessions_frame], padding=1)
@@ -1554,7 +1498,7 @@ class _LaunchScreen:
 
     def _key_bindings(self) -> KeyBindings:
         bindings = KeyBindings()
-        list_nav = Condition(lambda: not self.filter_mode and self.focus != "dir")
+        list_nav = Condition(lambda: not self.filter_mode)
         filtering = Condition(lambda: self.filter_mode)
         can_filter = Condition(
             lambda: not self.filter_mode and self.focus in {"provider", "sessions"}
@@ -1633,6 +1577,14 @@ class _LaunchScreen:
                     self._cancel()
             else:
                 self._move_focus(1)
+
+        # Traditional terminals often encode Ctrl+Enter as ordinary Enter.
+        # Ctrl+J is the distinguishable control-newline form supported by
+        # prompt_toolkit and is treated as the direct-launch command.
+        @bindings.add("c-j", eager=True)
+        def _ctrl_enter(event: Any) -> None:
+            if not self.filter_mode:
+                self._try_launch()
 
         @bindings.add("c-l", filter=list_nav, eager=True)
         def _launch_now(event: Any) -> None:
