@@ -173,7 +173,9 @@ ccsp provider list
 
 `list --app <app>` 可筛选 Claude、Codex、Grok 或 OpenCode，`--json` 可输出 JSON 元数据。列表中的 Alias 按 app 分组编号，例如 `c1`、`x2`、`g1`、`o1`。
 
-`provider show` 会为名称完全匹配的 provider 输出一条或多条可复用的 `provider add` 命令。默认将 API Key 替换为 `xxxx`：
+`provider show` 会为名称完全匹配的自定义 provider 先输出带 `--yes` 的 `provider delete`
+命令，再输出可复用的 `provider add` 命令。官方 provider 只输出 `add` 命令。默认将 API Key
+替换为 `xxxx`：
 
 ```bash
 ccsp provider show "<provider-name>"

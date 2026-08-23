@@ -834,7 +834,7 @@ def test_provider_reset_removes_deleted_codex_profiles(monkeypatch, tmp_path) ->
     assert removed == [(settings.codex.home, codex.id)]
 
 
-def test_provider_show_renders_a_redacted_add_command(monkeypatch) -> None:
+def test_provider_show_renders_delete_then_redacted_add_commands(monkeypatch) -> None:
     provider = _provider()
 
     class Repository:
@@ -847,11 +847,27 @@ def test_provider_show_renders_a_redacted_add_command(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert result.output == (
+        "ccsp provider delete claude 'Example Provider' --yes\n"
         "ccsp provider add claude --name 'Example Provider' "
         "--endpoint 'https://api.example.test/v1' --api-key 'xxxx' "
         "--model 'example-model' --effort 'high'\n"
     )
     assert "cli-secret-key" not in result.output
+
+
+def test_provider_show_omits_delete_command_for_official_provider(monkeypatch) -> None:
+    provider = replace(_provider(), id="claude-official", category="official")
+
+    class Repository:
+        def find_by_name(self, name):
+            assert name == provider.name
+            return [provider]
+
+    monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    result = CliRunner().invoke(main, ["provider", "show", provider.name])
+
+    assert result.exit_code == 0
+    assert "ccsp provider delete" not in result.output
 
 
 def test_provider_show_secret_includes_api_key(monkeypatch) -> None:
@@ -881,6 +897,7 @@ def test_provider_show_quotes_arguments_for_bash(monkeypatch) -> None:
     result = CliRunner().invoke(main, ["provider", "show", provider.name])
 
     assert result.exit_code == 0
+    assert "ccsp provider delete claude 'O'\"'\"'Connor' --yes" in result.output
     assert "--name 'O'\"'\"'Connor'" in result.output
 
 

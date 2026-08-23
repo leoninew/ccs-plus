@@ -247,13 +247,14 @@ def reset_providers(app_name: str | None, yes: bool) -> None:
 @click.argument("name")
 @click.option("--show-secret", is_flag=True, help="Show API keys without masking them.")
 def show_provider(name: str, show_secret: bool) -> None:
-    """Show every exact provider-name match as a reusable add command."""
+    """Show every exact provider-name match as reusable commands."""
     try:
         commands = (
-            _provider_show_command(provider, show_secret=show_secret)
+            command
             for provider in _repository().find_by_name(name)
+            for command in _provider_show_commands(provider, show_secret=show_secret)
         )
-        click.echo("\n\n".join(commands))
+        click.echo("\n".join(commands))
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -524,7 +525,19 @@ def _provider_display_record(entry: ProviderListEntry) -> dict[str, object]:
     }
 
 
-def _provider_show_command(provider: Provider, *, show_secret: bool) -> str:
+def _provider_show_commands(provider: Provider, *, show_secret: bool) -> tuple[str, ...]:
+    commands: list[str] = []
+    if not provider.is_official:
+        commands.append(_provider_delete_command(provider))
+    commands.append(_provider_add_command(provider, show_secret=show_secret))
+    return tuple(commands)
+
+
+def _provider_delete_command(provider: Provider) -> str:
+    return f"ccsp provider delete {provider.app.value} {_bash_quote(provider.name)} --yes"
+
+
+def _provider_add_command(provider: Provider, *, show_secret: bool) -> str:
     display = display_configuration(provider)
     try:
         runtime = runtime_from_provider(provider)
