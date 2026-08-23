@@ -1,0 +1,4 @@
+interface:
+  display_name: "CCSP 供应商管理"
+  short_description: "安全管理 ccs-plus 的供应商配置、备份恢复与 CLI 启动"
+  default_prompt: "使用 $ccsp-provider-manage 安全管理 ccs-plus 供应商。"
