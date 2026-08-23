@@ -292,7 +292,7 @@ make binary    # dist/ccs-plus（Windows: dist/ccs-plus.exe）
 | Grok | `apps.grok.home` | managed model profile |
 | OpenCode | `apps.opencode.home` | 隔离 `XDG_DATA_HOME` / `XDG_CONFIG_HOME` + `OPENCODE_CONFIG_CONTENT` |
 
-启动时按各 app 的 `visibility` 配置，将必要的用户 extensions 合并或链接进隔离 Home：Claude 的 skills、plugins、MCP；Codex 的 sessions、skills、plugins 与配置扩展；Grok 的 skills、plugins、hooks、installed plugins 与配置扩展；OpenCode 的 skills、plugins、agents、commands、tools、themes。不会将整个用户 Home 直接替换为隔离 Home。
+启动时按各 app 的 `visibility` 配置，将必要的用户 extensions 合并或链接进隔离 Home：Claude 的 skills、plugins、MCP；Codex 的 sessions、skills、plugins（包括已注册 plugin 的 cache）与配置扩展；Grok 的 skills、plugins、hooks、installed plugins 与配置扩展；OpenCode 的 skills、plugins、agents、commands、tools、themes。不会将整个用户 Home 直接替换为隔离 Home。Codex 仅隔离 provider 配置、认证和 plugin appserver/install staging 等运行时目录，不保留第二份 plugin 或 skill 内容。
 
 OpenCode 兼容 cc-switch 原生 provider 形状（`npm` / `options.baseURL` / `models`）；DB 无 OpenCode 行时会注入合成 `opencode-official`（本地 auth）。会话从 `share/opencode/opencode.db` 读取。
 

@@ -38,7 +38,7 @@ _CODEX_PROFILE_EXTENSION_KEYS = (
 _GROK_EXTENSION_KEYS = ("mcp_servers", "skills", "plugins", "marketplace", "hooks")
 _CODEX_SKILLS = EntryVisibilitySettings(skip_names=(".system",))
 _CODEX_PLUGINS = EntryVisibilitySettings(
-    skip_names=("cache", ".plugin-appserver", ".remote-plugin-install-staging")
+    skip_names=(".plugin-appserver", ".remote-plugin-install-staging")
 )
 _GROK_HOOKS = EntryVisibilitySettings(copy_names=("orca-status.json",))
 _GROK_INSTALLED_PLUGINS = EntryVisibilitySettings(copy_names=("registry.json",))
@@ -74,9 +74,7 @@ def test_home_visibility_factory_selects_runtime_implementation(
     claude = home_visibility_for(_runtime(ClaudeRuntime, AppKind.CLAUDE), settings, tmp_path)
     codex = home_visibility_for(_runtime(CodexRuntime, AppKind.CODEX), settings, tmp_path)
     grok = home_visibility_for(_runtime(GrokRuntime, AppKind.GROK), settings, tmp_path)
-    opencode = home_visibility_for(
-        _runtime(OpenCodeRuntime, AppKind.OPENCODE), settings, tmp_path
-    )
+    opencode = home_visibility_for(_runtime(OpenCodeRuntime, AppKind.OPENCODE), settings, tmp_path)
 
     assert isinstance(claude, ClaudeHomeVisibility)
     assert claude.mcp_key == settings.claude.visibility.mcp_key
@@ -238,7 +236,9 @@ def test_claude_home_visibility_uses_plugin_name_sets(tmp_path: Path) -> None:
     assert not (state_home / "plugins" / "plugin-catalog-cache.json").exists()
 
 
-def test_codex_home_visibility_skips_plugin_runtime_directories(tmp_path: Path) -> None:
+def test_codex_home_visibility_shares_plugin_cache_and_skips_runtime_directories(
+    tmp_path: Path,
+) -> None:
     user_home = tmp_path / "user-codex"
     state_home = tmp_path / "state-codex"
     (user_home / "plugins" / "cache").mkdir(parents=True)
@@ -253,33 +253,11 @@ def test_codex_home_visibility_skips_plugin_runtime_directories(tmp_path: Path) 
         plugins=_CODEX_PLUGINS,
     ).apply()
 
-    assert (state_home / "plugins" / "cache").is_dir()
-    assert not _is_link(state_home / "plugins" / "cache")
+    state_cache = state_home / "plugins" / "cache"
+    assert _is_link(state_cache)
+    assert _links_to(state_cache, user_home / "plugins" / "cache")
     assert not (state_home / "plugins" / ".plugin-appserver").exists()
     assert not (state_home / "plugins" / ".remote-plugin-install-staging").exists()
-
-
-def test_codex_home_visibility_prunes_unregistered_plugin_cache(tmp_path, caplog) -> None:
-    user_home = tmp_path / "user-codex"
-    cache = user_home / "plugins" / "cache" / "local-marketplace"
-    (cache / "example-plugin" / "1.0.0").mkdir(parents=True)
-    visibility = CodexHomeVisibility(
-        tmp_path / "state-codex",
-        user_home,
-        profile_extension_keys=_CODEX_PROFILE_EXTENSION_KEYS,
-        skills=_CODEX_SKILLS,
-        plugins=_CODEX_PLUGINS,
-    )
-
-    with caplog.at_level(logging.INFO, logger="ccs_plus.home_visibility"):
-        document = tomlkit.document()
-        document["plugins"] = tomlkit.table()
-        visibility.merge_into(document)
-
-    assert not (cache / "example-plugin").exists()
-    assert not cache.exists()
-    assert "example-plugin@local-marketplace" in caplog.text
-    assert "Removed unregistered" in caplog.text
 
 
 def test_codex_home_visibility_keeps_registered_plugin_cache(tmp_path) -> None:
