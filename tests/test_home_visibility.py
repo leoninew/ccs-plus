@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -23,6 +24,7 @@ from ccs_plus.home_visibility import (
     GrokHomeVisibility,
     OpenCodeHomeVisibility,
     _is_link,
+    _link_directory,
     _links_to,
     home_visibility_for,
     link_user_entries,
@@ -150,7 +152,7 @@ def test_link_user_entries_links_each_child_not_the_parent(tmp_path: Path) -> No
     assert not _is_link(target)
 
 
-def test_link_user_entries_skips_real_same_name_entries(tmp_path: Path) -> None:
+def test_link_user_entries_replaces_real_same_name_directory(tmp_path: Path) -> None:
     source = tmp_path / "user" / "skills"
     target = tmp_path / "state" / "skills"
     (source / "owned").mkdir(parents=True)
@@ -160,9 +162,67 @@ def test_link_user_entries_skips_real_same_name_entries(tmp_path: Path) -> None:
 
     link_user_entries(source, target)
 
-    assert (target / "owned" / "from-state.txt").read_text(encoding="utf-8") == "state"
-    assert not (target / "owned" / "from-user.txt").exists()
-    assert not _is_link(target / "owned")
+    owned = target / "owned"
+    assert _is_link(owned)
+    assert _links_to(owned, source / "owned")
+    assert (owned / "from-user.txt").read_text(encoding="utf-8") == "user"
+    assert not (owned / "from-state.txt").exists()
+
+
+def test_link_user_entries_replaces_real_same_name_file(tmp_path: Path) -> None:
+    source = tmp_path / "user" / "plugins"
+    target = tmp_path / "state" / "plugins"
+    source.mkdir(parents=True)
+    target.mkdir(parents=True)
+    payload = source / "known_marketplaces.json"
+    payload.write_text('{"source": true}\n', encoding="utf-8")
+    stale = target / payload.name
+    stale.write_text('{"state": true}\n', encoding="utf-8")
+
+    link_user_entries(source, target)
+
+    assert stale.read_text(encoding="utf-8") == '{"source": true}\n'
+    payload.write_text('{"updated": true}\n', encoding="utf-8")
+    assert stale.read_text(encoding="utf-8") == '{"updated": true}\n'
+
+
+def test_link_user_entries_replaces_link_to_different_source(tmp_path: Path) -> None:
+    source = tmp_path / "user" / "skills"
+    target = tmp_path / "state" / "skills"
+    expected = source / "shared"
+    incorrect = tmp_path / "other-user" / "shared"
+    expected.mkdir(parents=True)
+    incorrect.mkdir(parents=True)
+    target.mkdir(parents=True)
+    _link_directory(incorrect, target / "shared")
+
+    link_user_entries(source, target)
+
+    assert _is_link(target / "shared")
+    assert _links_to(target / "shared", expected)
+
+
+@pytest.mark.parametrize("target_kind", ("file", "link"))
+def test_link_user_entries_replaces_conflicting_target_root(
+    tmp_path: Path, target_kind: str
+) -> None:
+    source = tmp_path / "user" / "skills"
+    target = tmp_path / "state" / "skills"
+    (source / "shared").mkdir(parents=True)
+    target.parent.mkdir(parents=True)
+    if target_kind == "file":
+        target.write_text("stale", encoding="utf-8")
+    else:
+        incorrect = tmp_path / "other-user" / "skills"
+        incorrect.mkdir(parents=True)
+        _link_directory(incorrect, target)
+
+    link_user_entries(source, target)
+
+    assert target.is_dir()
+    assert not _is_link(target)
+    assert _is_link(target / "shared")
+    assert _links_to(target / "shared", source / "shared")
 
 
 def test_link_user_entries_removes_dangling_links(tmp_path: Path) -> None:
@@ -258,6 +318,34 @@ def test_codex_home_visibility_shares_plugin_cache_and_skips_runtime_directories
     assert _links_to(state_cache, user_home / "plugins" / "cache")
     assert not (state_home / "plugins" / ".plugin-appserver").exists()
     assert not (state_home / "plugins" / ".remote-plugin-install-staging").exists()
+
+
+def test_codex_home_visibility_replaces_existing_plugin_cache(tmp_path: Path) -> None:
+    user_home = tmp_path / "user-codex"
+    state_home = tmp_path / "state-codex"
+    user_cache = user_home / "plugins" / "cache"
+    (user_cache / "local" / "plugin" / ".codex-plugin").mkdir(parents=True)
+    (user_cache / "local" / "plugin" / ".codex-plugin" / "plugin.json").write_text(
+        '{"name": "plugin"}\n', encoding="utf-8"
+    )
+    stale_cache = state_home / "plugins" / "cache"
+    (stale_cache / "local" / "plugin" / "partial-package").mkdir(parents=True)
+    readonly_object = stale_cache / "local" / "plugin" / "partial-package" / "git-object"
+    readonly_object.write_text("stale", encoding="utf-8")
+    readonly_object.chmod(stat.S_IREAD)
+
+    CodexHomeVisibility(
+        state_home,
+        user_home,
+        profile_extension_keys=_CODEX_PROFILE_EXTENSION_KEYS,
+        skills=_CODEX_SKILLS,
+        plugins=_CODEX_PLUGINS,
+    ).apply()
+
+    assert _is_link(stale_cache)
+    assert _links_to(stale_cache, user_cache)
+    assert (stale_cache / "local" / "plugin" / ".codex-plugin" / "plugin.json").is_file()
+    assert not (stale_cache / "local" / "plugin" / "partial-package").exists()
 
 
 def test_codex_home_visibility_keeps_registered_plugin_cache(tmp_path) -> None:
@@ -421,6 +509,21 @@ def test_link_user_entries_copy_overrides_stale_target(tmp_path: Path) -> None:
     assert not _is_link(stale)
 
 
+def test_link_user_entries_copy_replaces_stale_directory(tmp_path: Path) -> None:
+    source = tmp_path / "user" / "plugins"
+    target = tmp_path / "state" / "plugins"
+    source.mkdir(parents=True)
+    payload = source / "known_marketplaces.json"
+    payload.write_text('{"real": true}\n', encoding="utf-8")
+    stale = target / payload.name
+    (stale / "nested").mkdir(parents=True)
+
+    link_user_entries(source, target, copy_names={payload.name})
+
+    assert stale.read_text(encoding="utf-8") == '{"real": true}\n'
+    assert stale.is_file()
+
+
 def test_link_user_entries_skips_named_entries(tmp_path: Path) -> None:
     source = tmp_path / "user" / "plugins"
     target = tmp_path / "state" / "plugins"
@@ -470,18 +573,22 @@ def test_codex_home_visibility_links_only_the_session_directory(tmp_path: Path) 
     assert (source / "created-by-runtime.jsonl").read_text(encoding="utf-8") == "session"
 
 
-def test_codex_home_visibility_preserves_existing_session_directory(tmp_path: Path) -> None:
+def test_codex_home_visibility_replaces_existing_session_directory(tmp_path: Path) -> None:
     user_home = tmp_path / "user-codex"
     state_home = tmp_path / "state-codex"
+    user_sessions = user_home / "sessions"
+    user_sessions.mkdir(parents=True)
+    (user_sessions / "user.jsonl").write_text("user", encoding="utf-8")
     existing = state_home / "sessions"
     existing.mkdir(parents=True)
-    marker = existing / "keep.jsonl"
+    marker = existing / "stale.jsonl"
     marker.write_text("state", encoding="utf-8")
 
     CodexHomeVisibility(state_home, user_home).expose_sessions()
 
-    assert marker.read_text(encoding="utf-8") == "state"
-    assert not _is_link(existing)
+    assert _is_link(existing)
+    assert _links_to(existing, user_home / "sessions")
+    assert not marker.exists()
 
 
 def test_claude_home_visibility_merges_user_mcp_over_existing(tmp_path: Path) -> None:

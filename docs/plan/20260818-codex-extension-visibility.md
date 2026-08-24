@@ -1,5 +1,5 @@
 # 受管启动的用户与项目扩展可见性计划
-最后修改时间: 2026-08-18 18:58:47
+最后修改时间: 2026-08-24 16:56:32
 
 Review status: Accepted
 
@@ -35,9 +35,11 @@ shell policy。provider endpoint、API Key、模型、权限、认证与其他�
 Codex managed profile 重建须先恢复既有允许继承表，再覆盖 provider 核心字段，最后由
 `CodexHomeVisibility` 按上述优先级合并。不能继续只保留 `projects` 后从空文档构造。
 
-目录策略保持逐条 link/copy/skip：skills 与已注册 plugin 的必要缓存/索引目录可见；
-插件 appserver、安装 staging 和其他运行时临时目录保持隔离。对于仅发现 cache、未在
-user config 或既有 profile/state 注册的插件，记录可操作诊断但不设置 `enabled = true`。
+目录策略按 CLI 语义区分：skills 与普通 plugin 条目继续逐条 link/copy/skip；Codex
+`plugins/cache` 是 user Home 权威的整体链接，不能由 state 侧已有实体目录阻止或遮蔽，
+目标为实体目录或错误链接时应替换为指向 user cache 的链接。Codex plugin appserver、
+安装 staging 和其他运行时临时目录保持隔离。对于仅发现 cache、未在 user config 或既有
+profile/state 注册的插件，记录可操作诊断但不设置 `enabled = true`。
 
 ### CLI 独立的 visibility 配置
 
@@ -116,8 +118,9 @@ Click 命令组使用单数 `provider`，所有子命令、usage 文本、README
      而非只恢复 `projects`。
    - 修改 `CodexHomeVisibility.merge_into()`，按统一优先级合并 MCP、plugins、
      marketplaces 与 shell policy；user Home 同名配置必须覆盖。
-   - 保持 skills 与 plugins cache 的逐条链接，并为 cache-only、未注册插件增加安全
-     诊断路径。
+   - 保持 skills 与普通 plugin 条目的逐条链接；将 `plugins/cache` 作为整体 user-home
+     权威链接，覆盖 state 侧已有实体目录或错误链接，并为 cache-only、未注册插件增加
+     安全诊断路径。
 
 3. **审计并补齐 Claude/Grok 同类重建路径**
    - Claude 保留 `skills`/`plugins` 的 link/copy/skip 语义，并将 `mcpServers` 的
@@ -180,7 +183,7 @@ Click 命令组使用单数 `provider`，所有子命令、usage 文本、README
 
 | 文件 | 计划变更 |
 | --- | --- |
-| `src/ccs_plus/home_visibility.py` | 跨端扩展表的保留与优先级合并；Codex cache-only 诊断；保持目录隔离规则。 |
+| `src/ccs_plus/home_visibility.py` | 跨端扩展表的保留与优先级合并；Codex user-authoritative `plugins/cache` 链接与覆盖；cache-only 诊断；保持 appserver/staging 隔离。 |
 | `src/ccs_plus/managed_config.py` | Codex profile 重建时保留允许继承的既有扩展表。 |
 | `src/ccs_plus/launcher.py` | 确保 project cwd 原样传递、user-Home 禁用路径和 visibility 调用契约覆盖。 |
 | `tests/test_home_visibility.py` | 三端目录、配置优先级、cache-only、user-Home 禁用测试。 |
@@ -204,6 +207,9 @@ Click 命令组使用单数 `provider`，所有子命令、usage 文本、README
 - 单元：cache-only plugin 产生诊断且未自动 enable；已注册的 `best-practices` 可在
   Codex profile 保留任一正式注册 plugin 及其 skill 所需的 config 与目录状态；
   `best-practices` 仅作为代表性回归夹具，不允许为其加入特殊逻辑。
+- 单元：Codex user cache 存在时，state `plugins/cache` 缺失、为实体目录或指向错误来源
+  的链接，均被替换为指向 user cache 的链接；已有实体目录不会继续遮蔽 user cache，且
+  appserver/staging 目录仍不被覆盖。
 - 单元：项目目录启动保留 `cwd` 和原生项目级扩展发现；`cwd == Path.home()` 时三个
   runtime 都不产生 user-home link/merge。
 - 单元：同一 provider 主键的重复 ensure 复用同一 profile/env key，且不生成
@@ -224,6 +230,8 @@ Click 命令组使用单数 `provider`，所有子命令、usage 文本、README
   该通用约束。
 - 仅以“未在当前 user config 出现”判断删除会误删有效旧 profile 配置；本次默认保留。
   若未来需要显式移除同步，必须设计可区分用户卸载和配置暂时不可读的证据。
+- Windows 上替换正在使用的实体 cache 可能因文件锁失败；实现必须报告失败，不得静默
+  回退到旧实体 cache。
 - 三个 CLI 的项目级发现协议会随版本改变；测试夹具必须使用已验证的原生机制，不能
   以 ccs-plus 私有目录约定替代。
 - 旧过程文档删除后，新的 requirement、plan 和后续 verification 是此行为的唯一过程

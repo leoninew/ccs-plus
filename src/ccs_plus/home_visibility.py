@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import tempfile
 from collections.abc import Collection, Mapping, MutableMapping
 from copy import deepcopy
@@ -136,17 +137,15 @@ class CodexHomeVisibility(HomeVisibility):
             return
         source = self.user_home / "sessions"
         target = self.state_home / "sessions"
+        source_was_present = source.is_dir()
         try:
             source.mkdir(parents=True, exist_ok=True)
             target.parent.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             raise OSError(f"Failed to prepare Codex session paths: {exc}") from exc
-        if _path_lexists(target):
+        if not source_was_present and _path_lexists(target):
             return
-        try:
-            _link_directory(source, target)
-        except OSError as exc:
-            logger.warning("Failed to link Codex sessions %s -> %s: %s", target, source, exc)
+        _link_one(source, target)
 
     def merge_into(self, document: TOMLDocument) -> None:
         state_document = _read_toml(self.state_home / "config.toml", "Codex state")
@@ -330,28 +329,43 @@ def link_user_entries(
     real home need no link. Other files are hardlinked then symlinked. Names in
     *skip_names* are never touched on the target side.
 
-    Never links *source_dir* itself as a single unit. Existing real entries in
-    *target_dir* are left untouched. Dangling links are removed. Failures log a
-    warning and do not raise.
+    Never links *source_dir* itself as a single unit. Source entries are
+    authoritative: any conflicting target file, directory, or incorrect link
+    is replaced. Dangling links are removed. Failures log a warning and do not
+    raise.
     """
     try:
         if not source_dir.is_dir():
             return
-        target_dir.mkdir(parents=True, exist_ok=True)
-        _cleanup_dangling_links(target_dir)
-        skip = set(skip_names)
-        copy = set(copy_names)
-        for source_entry in sorted(source_dir.iterdir(), key=lambda path: path.name.lower()):
-            name = source_entry.name
-            if name in skip:
-                continue
-            target_entry = target_dir / name
-            if name in copy and source_entry.is_file():
-                _copy_file(source_entry, target_entry)
-            else:
-                _link_one(source_entry, target_entry)
+        if _path_key(source_dir) == _path_key(target_dir):
+            return
+        lock_path = target_dir.parent / f".{target_dir.name}.ccs-plus.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with portalocker.Lock(str(lock_path), timeout=30):
+            _link_user_entries(source_dir, target_dir, skip_names, copy_names)
     except OSError as exc:
         logger.warning("Failed to prepare links from %s into %s: %s", source_dir, target_dir, exc)
+
+
+def _link_user_entries(
+    source_dir: Path,
+    target_dir: Path,
+    skip_names: Collection[str],
+    copy_names: Collection[str],
+) -> None:
+    _prepare_target_directory(source_dir, target_dir)
+    _cleanup_dangling_links(target_dir)
+    skip = set(skip_names)
+    copy = set(copy_names)
+    for source_entry in sorted(source_dir.iterdir(), key=lambda path: path.name.lower()):
+        name = source_entry.name
+        if name in skip:
+            continue
+        target_entry = target_dir / name
+        if name in copy and source_entry.is_file():
+            _copy_file(source_entry, target_entry)
+        else:
+            _link_one(source_entry, target_entry)
 
 
 def _read_json_object(path: Path, label: str) -> dict[str, Any] | None:
@@ -456,24 +470,27 @@ def _cleanup_dangling_links(target_dir: Path) -> None:
         if _link_destination_exists(entry):
             continue
         try:
-            entry.unlink(missing_ok=True)
+            _remove_target(entry)
             logger.warning("Removed dangling link %s", entry)
         except OSError as exc:
             logger.warning("Failed to remove dangling link %s: %s", entry, exc)
+
+
+def _prepare_target_directory(source_dir: Path, target_dir: Path) -> None:
+    """Keep an isolated entry container while rejecting conflicting roots."""
+    if _path_lexists(target_dir) and (_is_link(target_dir) or not target_dir.is_dir()):
+        _remove_target(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _link_one(source: Path, target: Path) -> None:
     if _path_lexists(target):
         if _is_link(target) and _links_to(target, source):
             return
-        if _is_link(target) and not _link_destination_exists(target):
-            try:
-                target.unlink(missing_ok=True)
-            except OSError as exc:
-                logger.warning("Failed to replace dangling link %s: %s", target, exc)
-                return
-        else:
-            # Real entry or link to a different target: isolation side wins.
+        try:
+            _remove_target(target)
+        except OSError as exc:
+            logger.warning("Failed to replace target %s: %s", target, exc)
             return
 
     try:
@@ -521,9 +538,57 @@ def _copy_file(source: Path, target: Path) -> None:
     if _is_link(target) and _links_to(target, source):
         return
     try:
+        if _path_lexists(target):
+            _remove_target(target)
         shutil.copy2(source, target)
     except OSError as exc:
         logger.warning("Failed to copy %s -> %s: %s", target, source, exc)
+
+
+def _remove_target(path: Path) -> None:
+    """Remove a conflicting state entry without following directory links."""
+    if _is_link(path):
+        _remove_link(path)
+    elif path.is_dir():
+        shutil.rmtree(path, onerror=_remove_readonly_and_retry)
+    else:
+        _remove_readonly_and_retry(os.unlink, path, None)
+
+
+def _remove_link(path: Path) -> None:
+    try:
+        if path.is_symlink():
+            path.unlink()
+        elif os.name == "nt":
+            path.rmdir()
+        else:
+            path.unlink()
+    except PermissionError:
+        _make_writable(path)
+        if path.is_symlink():
+            path.unlink()
+        elif os.name == "nt":
+            path.rmdir()
+        else:
+            path.unlink()
+
+
+def _remove_readonly_and_retry(function: object, path: str | Path, _exc_info: object) -> None:
+    """Retry an rmtree operation after clearing a Windows read-only flag."""
+    target = Path(path)
+    _make_writable(target)
+    cast(Any, function)(path)
+
+
+def _make_writable(path: Path) -> None:
+    if path.is_symlink():
+        return
+    try:
+        mode = path.stat().st_mode
+        os.chmod(path, mode | stat.S_IWRITE)
+    except OSError:
+        # Preserve the original removal error when attributes cannot be read or changed.
+        raise
 
 
 def _path_lexists(path: Path) -> bool:

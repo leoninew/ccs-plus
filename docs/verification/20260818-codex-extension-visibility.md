@@ -1,5 +1,5 @@
 # 受管启动的用户与项目扩展可见性验证
-最后修改时间: 2026-08-18 18:59:26
+最后修改时间: 2026-08-24 16:56:32
 
 Review status: Draft
 
@@ -14,6 +14,8 @@ Review status: Draft
 - 从 OS user Home 启动时，不应用 user-home visibility；但 Codex 仍携带配置声明的
   profile 保留表，避免 managed profile 重建丢失已有扩展。
 - cache-only Codex plugin 只产生诊断，不会被隐式注册或启用。
+- Codex `plugins/cache` 应整体链接到真实 user Home；state 侧已有实体 cache 不能遮蔽
+  user cache。
 - `best-practices` 与 `housekeeper` 的同步脚本均使用显式 `*_USER_HOME`，并把本地
   marketplace/plugin 路径转换为 native CLI 可识别的 Windows 路径。
 - provider 的 `export`、`import`、`reset` 均支持可选 app 前置；省略 app 时分别在
@@ -54,8 +56,10 @@ path 的 export 分别生成 `providers-all-<timestamp>.json` 与
 | 顶层命令短用法 | `l`、`p`、`r` 分别复用 `launch`、`provider`、`run` 的同一 Click 命令对象。 |
 | CLI 别名 | 保留 `ccs-plus` 主命令，并注册指向相同入口的 `ccsp`。 |
 
-实际变更与 Requirement/Plan 一致；未发现超出范围的生产行为变更。旧 SpecFlow 文档的删除
-由新 Requirement、Plan 和本 Verification 统一承接，未发现指向被删除文档的 Markdown 链接。
+当前实际变更与 Requirement/Plan 的大部分内容一致，但 Codex `plugins/cache` 仍受通用
+“目标端已有实体目录保持不动”规则影响，尚未满足 user-authoritative 覆盖要求。旧
+SpecFlow 文档的删除由本 Requirement、Plan 和 Verification 统一承接，未发现指向被删除
+文档的 Markdown 链接。
 
 ## Acceptance Checklist
 
@@ -63,6 +67,7 @@ path 的 export 分别生成 `providers-all-<timestamp>.json` 与
 - [x] 三端 user-home skills/plugins/MCP/扩展配置的隔离可见性有回归覆盖。
 - [x] Codex repeated ensure 保留已有扩展并以 user 配置覆盖同名项。
 - [x] cache-only plugin 有诊断且不自动启用。
+- [ ] Codex user cache 覆盖 state 侧已有实体 `plugins/cache`，并恢复为正确链接。
 - [x] user-Home 启动不执行 user-home link/merge，provider 隔离保持。
 - [x] provider 主键 profile identity 和无 `.ccs-plus.bak` 有回归覆盖。
 - [x] 同步脚本不再直接调用会继承受管 `GROK_HOME` 的 `grok plugin` 子命令。
@@ -94,8 +99,10 @@ path 的 export 分别生成 `providers-all-<timestamp>.json` 与
   user-home 包装与 native path 传递；首次实际执行仍应在可恢复的用户环境中观察 CLI 输出。
 - 真实 user-home 中只有 cache、没有 plugin registration 的情况仍保持不自动恢复；这是
   已接受的安全边界。
+- 当前 state 侧若已存在实体 `plugins/cache`，启动不会替换它，因此 user cache 可能继续
+  不可见；需完成 Plan 中的 Codex cache 覆盖实现后重新验证。
 
 ## Conclusion
 
-实现满足当前 Requirement 和 Plan，工程检查通过。建议将 ccs-plus 的暂存变更与两个 plugin
-仓库中的 `sync.sh` 修改分别提交，避免跨仓库提交混合。
+除 Codex user-authoritative cache 覆盖外，当前实现满足既有 Requirement 和 Plan，工程检查
+通过。Verification 保持 Draft，待完成该行为修正及回归测试后再重新验收。

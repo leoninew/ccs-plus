@@ -1,5 +1,5 @@
 # 受管启动的用户与项目扩展可见性
-最后修改时间: 2026-08-18 18:58:47
+最后修改时间: 2026-08-24 16:56:32
 
 Review status: Accepted
 
@@ -30,6 +30,12 @@ Windows 原生 `codex`。前者会把 skill 或 registry 写进 Orca/ccs-plus ru
 cache，缺少原生 plugin/marketplace 注册。该同步脚本边界也必须修复，不能由 launch
 阶段把 cache 推断为已安装插件。
 
+近期实现历史进一步确认，`03e063e` 曾将 Codex plugin cache 隔离为 state 侧实体目录，
+`76fecae` 又恢复为共享 user cache；后者沿用了通用的“目标端已有实体条目则保持不动”
+规则。因此历史实体 `data/codex/plugins/cache` 会遮蔽完整的
+`~/.codex/plugins/cache`，无法随下一次启动恢复。Codex plugin cache 不应遵循该通用
+条目保留规则，而应以真实 user Home 的 cache 根目录为权威来源。
+
 现场清理进一步确认，受管 Codex profile 文件名由 provider 数据库主键的哈希构成；
 同一 provider 记录的重复启动会复用同一 profile。问题不在 profile identity，而是每次
 `ensure()` 覆盖配置前都会生成 `.ccs-plus.bak`，这不是 provider 隔离所需状态。
@@ -46,7 +52,7 @@ Plan/Verification 是后续修复的统一过程来源。
 
 | 历史文档 | 已合并的约束或证据 | 本需求的处理 |
 | --- | --- | --- |
-| 20260811 link/merge requirement 与 plan（已移除） | 确立“能 link 就 link、需要 merge 就 merge、运行 Home 不全量 hybrid”；skills/plugins 逐条链接；Codex plugin 启用依赖 `[plugins]` 与 `[marketplaces]`，不只是 cache。 | 保留隔离和逐条 link；扩展 profile 重建的保留策略，修复仅以当次 user config 整表写入导致旧有效注册丢失的缺口。 |
+| 20260811 link/merge requirement 与 plan（已移除） | 确立“能 link 就 link、需要 merge 就 merge、运行 Home 不全量 hybrid”；skills/plugins 逐条链接；Codex plugin 启用依赖 `[plugins]` 与 `[marketplaces]`，不只是 cache。 | 保留隔离边界；skills 与普通 plugin 条目继续逐条 link，但 Codex `plugins/cache` 作为整体链接并由 user Home 权威覆盖已有 state 实体目录；同时保留 profile 重建策略。 |
 | 20260814 MCP propagation requirement（已移除） | Codex state home 与 user home 的 MCP 应合并；同名 user MCP 覆盖 state 项。 | 沿用该优先级，并扩展到 profile/state 重建时不丢失不同名的既有允许继承项。 |
 | 20260815 home visibility requirement 与 verification（已移除） | `HomeVisibility` 三端抽象已上线且验收通过；Claude、Codex、Grok 目录共享、配置合并、缓存隔离和 user-home 覆盖已具备实现与测试基础。 | 作为本次修复的直接基线；新增跨端重复重建、项目级发现和 user-Home 启动禁用的回归验收。 |
 | 20260728 Codex MCP inheritance requirement（已移除） | 在不破坏 provider 隔离下继承用户 Codex MCP 的最初需求和风险边界。 | 保留 provider 核心配置隔离与 user MCP 优先级。 |
@@ -69,6 +75,8 @@ profile/state 仍有效扩展项的保留规则。缓存仍不是 enablement 的
   扩展继承，避免自引用、重复加载和将个人 Home 误作项目。
 - 对“缓存存在但未注册”的插件给出可预测、安全的行为与诊断，避免再次出现缓存存在
   而运行时不可发现的状态。
+- Codex `plugins/cache` 以真实 user Home 为唯一内容来源；state Home 的同名实体目录或
+  旧链接不能遮蔽该来源，启动后必须指向 user cache。
 - 受管配置写入保持锁与原子替换，但不生成旁路 `.ccs-plus.bak` 文件。
 - provider 的导出、导入与重置均支持 `claude`、`codex`、`grok` 作为可选前置；未指定
   app 时在各操作原有的过滤边界内同时处理三端数据。
@@ -111,6 +119,8 @@ profile/state 仍有效扩展项的保留规则。缓存仍不是 enablement 的
   与配置在隔离 runtime home 中可见，且临时运行目录仍隔离。
 - 使用 Sub2API 的新 profile 与已有 profile 都覆盖 MCP、已注册 plugin、marketplace
   和 skill 发现；Claude/Grok 也有等价的回归测试。
+- Codex state Home 的 `plugins/cache` 在目标缺失、目标为实体目录或目标链接错误时，均
+  能恢复为指向 user Home cache 的链接；appserver 与 remote install staging 仍保持隔离。
 - 从项目目录启动的测试证明原生项目级 skills、MCP、plugins 或等价扩展设施仍可发现；
   从 user Home 启动的测试证明这些 visibility 行为不执行。
 - 当插件仅存 cache、未在 user Home 注册时，行为与诊断有测试覆盖；不隐式改变用户
@@ -143,6 +153,9 @@ profile/state 仍有效扩展项的保留规则。缓存仍不是 enablement 的
 - 当前工作目录始终原样传给原生 CLI；`ccs-plus` 不复制、覆盖或替换其项目级扩展配置。
 - 工作目录等于操作系统 user Home 时禁用 visibility，保持现有隔离语义。
 - 缓存本身不是插件已启用的证据；默认不由 `ccs-plus` 自动恢复为 enabled。
+- Codex plugin package cache 与 plugin enablement 是两个独立问题：cache 根目录由 user
+  Home 权威链接提供，是否启用仍只由 `[plugins]`/`[marketplaces]` 注册决定；不得从 cache
+  反推 enablement。
 - plugin 的同步脚本必须忽略继承的 runtime Home 变量，显式写入真实 user home，并向
   Windows 原生 CLI 传递其可识别的本地路径。
 - Claude、Codex、Grok 的可见性合并键和目录 copy/skip 策略必须分别声明在
