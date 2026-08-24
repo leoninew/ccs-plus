@@ -5,7 +5,7 @@
 help:
 	@echo "Common targets:"
 	@echo "  make install       Sync project and development dependencies"
-	@echo "  make release       Install this project and publish the standalone skill"
+	@echo "  make release       Install this project"
 	@echo "  make test          Run the test suite"
 	@echo "  make check         Run lint and apply formatting"
 	@echo "  make binary        Build a local one-file binary with PyInstaller"
@@ -14,9 +14,7 @@ install:
 	uv sync --all-groups
 
 release:
-	python scripts/release.py skill check --strict
 	pip install -e .
-	python scripts/release.py skill apply --strict
 
 test:
 	uv run pytest tests

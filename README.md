@@ -101,32 +101,14 @@ Invoke-WebRequest -Uri "https://github.com/leoninew/ccs-plus/releases/latest/dow
 ```bash
 make install
 make release
-# 或：pip install -e .
 ```
 
-`make release` 会先执行无副作用的 `skill check --strict`，再安装项目，最后执行
-`python scripts/release.py skill apply --strict` 发布独立 Skill，因此要求 Claude、Codex、Grok
-三端 CLI 都已安装。只需要安装 CLI 时使用 `pip install -e .`。安装完成后可使用 `ccs-plus`
-或其别名 `ccsp` 执行命令：
+安装后：
 
 ```bash
 ccsp
 ccsp provider list
 ```
-
-独立 Skill 的发布入口是仓库内 vendored 的 `scripts/release.py`。自动模式只处理 PATH 中已安装的
-客户端；显式客户端或 `--strict` 在任何写入前失败。该项目不声明 native plugin、marketplace 或
-plugin cache 内容：
-
-```bash
-python scripts/release.py skill check
-python scripts/release.py skill list
-python scripts/release.py skill apply --dry-run
-python scripts/release.py skill apply --codex
-python scripts/release.py skill remove --grok
-```
-
-Skill 更新后请重新开始 Claude、Codex、Grok 的 agent session，使宿主重新发现新副本。
 
 ### TUI 速查
 
