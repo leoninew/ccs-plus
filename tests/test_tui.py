@@ -16,7 +16,7 @@ from prompt_toolkit.output import DummyOutput
 from ccs_plus.adapters import build_provider
 from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider
 from ccs_plus.launch_history import LaunchHistory
-from ccs_plus.tui import PERMISSION_PRESETS, LaunchPlan, run_launcher
+from ccs_plus.tui import PERMISSION_PRESETS, LaunchPlan, _LaunchScreen, run_launcher
 
 _T = TypeVar("_T")
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
@@ -113,6 +113,23 @@ def test_launcher_selects_codex_and_permission_preset(tmp_path: Path) -> None:
     assert plan.provider.app is AppKind.CODEX
     assert plan.approval_policy == on_request.approval_policy
     assert plan.sandbox_mode == on_request.sandbox_mode
+
+
+def test_launcher_opencode_app_cursor_stays_inside_rendered_rows(tmp_path: Path) -> None:
+    settings = make_app_settings(tmp_path)
+    providers = [_provider(app, app.display_name) for app in AppKind]
+    screen = _LaunchScreen(
+        settings=settings,
+        providers=providers,
+        history=LaunchHistory.load(tmp_path / "history.json"),
+        default_cwd=tmp_path,
+    )
+
+    screen._set_app(screen.apps.index(AppKind.OPENCODE))
+    content = screen._app_window.content.create_content(width=40, height=len(screen.apps))
+
+    assert content.cursor_position.y == screen.app_index
+    assert content.cursor_position.y < content.line_count
 
 
 def test_permission_presets_match_native_cli_values() -> None:

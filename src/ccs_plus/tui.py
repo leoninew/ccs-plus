@@ -1297,7 +1297,10 @@ class _LaunchScreen:
             "app",
             on_click_row=self._click_app,
             on_scroll=lambda d: self._navigate(d),
-            get_cursor_position=lambda: Point(x=0, y=self.app_index * _SESSION_ROW),
+            # App entries are single-line rows. Using the two-line session row
+            # height here places the cursor beyond the rendered content for
+            # Grok/OpenCode and crashes prompt_toolkit while scrolling.
+            get_cursor_position=lambda: Point(x=0, y=self.app_index),
         )
         provider_control = self._make_list_control(
             lambda: FormattedText(self._provider_lines()),
