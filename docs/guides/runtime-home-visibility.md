@@ -1,6 +1,6 @@
 # Runtime Home 可见性与权威来源
 
-最后修改时间: 2026-08-24 18:01:47
+最后修改时间: 2026-08-24 23:15:23
 
 `ccsp launch` 同时使用真实用户 Home 与隔离的 state Home。用户 Home 保存用户主动安装、
 启用和维护的扩展；state Home 只保存 ccs-plus 的 provider runtime 状态。两者不能互为
@@ -23,6 +23,7 @@ source 中存在的目录或文件必须覆盖同名 state target，不得因 ta
 | 内容 | 权威来源 | state Home 行为 |
 | --- | --- | --- |
 | 用户 skills、plugins、hooks、OpenCode 用户配置条目 | 对应 `~` 下 app Home | 同名 target 覆盖后链接；声明为 copy 的文件覆盖复制。 |
+| Claude `settings.json` 的 `apps.claude.visibility.settings_keys` 声明键（`settings.yaml` 必填声明为 `enabledPlugins`、`extraKnownMarketplaces`） | `~/.claude/settings.json` | 按键并集合并到 state `settings.json`，同名条目以 user Home 为准；state 独有键（如 `theme`）保留。 |
 | Codex `plugins/cache` | `~/.codex/plugins/cache` | 作为一个整体链接；已有 state 实体 cache 或错误链接必须替换。 |
 | Codex `sessions` | `~/.codex/sessions` | 作为一个整体链接；不保留 state 的第二份 sessions 目录。 |
 | MCP、plugin enablement、marketplace 等允许继承的配置表 | 真实 user Home `config.toml` | 按既有 profile/state 再到 user Home 的顺序合并；同名 user 配置最终覆盖。 |
@@ -31,6 +32,13 @@ source 中存在的目录或文件必须覆盖同名 state target，不得因 ta
 
 `plugins/cache` 的内容可见不等于插件已启用。启用仍取决于 `[plugins]` 与
 `[marketplaces]` 注册；不得从缓存目录反推或自动写入 enablement。
+
+Claude 侧同理：缓存可见不等于已启用，启用取决于 `settings.json` 的 `enabledPlugins`。
+由于 `plugins/cache` 通过 junction 与 user Home 共享，隔离会话的 cache 清扫会以自己可见的
+启用清单判定"在用"条目；若隔离 `settings.json` 缺少 user Home 刚启用的插件，共享缓存会被
+标记 `.orphaned_at` 并在宽限期后删除，两个 Home 同时失去该插件。因此 `enabledPlugins` 与
+`extraKnownMarketplaces` 必须随每次启动合并进 state `settings.json`（2026-08-24 specflow
+缓存被误孤立即为此类事故）。
 
 ## 同步规则
 

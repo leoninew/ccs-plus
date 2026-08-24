@@ -70,6 +70,7 @@ class ClaudeVisibilitySettings:
     mcp_key: str
     skills: EntryVisibilitySettings
     plugins: EntryVisibilitySettings
+    settings_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -255,6 +256,11 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
                 ),
                 skills=_resolve_entry_visibility(config, "apps.claude.visibility.skills"),
                 plugins=_resolve_entry_visibility(config, "apps.claude.visibility.plugins"),
+                settings_keys=_resolve_name_list(
+                    _get(config, "apps.claude.visibility.settings_keys"),
+                    "apps.claude.visibility.settings_keys",
+                    required=True,
+                ),
             ),
         ),
         codex=CodexSettings(

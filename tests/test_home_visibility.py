@@ -80,6 +80,7 @@ def test_home_visibility_factory_selects_runtime_implementation(
 
     assert isinstance(claude, ClaudeHomeVisibility)
     assert claude.mcp_key == settings.claude.visibility.mcp_key
+    assert claude.settings_keys == settings.claude.visibility.settings_keys
     assert claude.plugins == settings.claude.visibility.plugins
     assert isinstance(codex, CodexHomeVisibility)
     assert codex.profile_extension_keys == settings.codex.visibility.profile_extension_keys
@@ -697,3 +698,144 @@ def test_claude_home_visibility_ignores_invalid_target(tmp_path: Path, caplog) -
 
     assert "Skipping Claude MCP target" in caplog.text
     assert target.read_text(encoding="utf-8") == "{broken"
+
+
+def test_claude_home_visibility_merges_settings_keys(tmp_path: Path) -> None:
+    user_home = tmp_path / ".claude"
+    user_home.mkdir()
+    source = user_home / "settings.json"
+    source.write_text(
+        json.dumps(
+            {
+                "theme": "dark",
+                "enabledPlugins": {
+                    "shared@market": True,
+                    "user-only@market": True,
+                },
+                "extraKnownMarketplaces": {"local": {"source": {"path": "/x"}}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = tmp_path / "claude"
+    state.mkdir()
+    target = state / "settings.json"
+    target.write_text(
+        json.dumps(
+            {
+                "theme": "auto",
+                "enabledPlugins": {
+                    "shared@market": False,
+                    "state-only@market": True,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    ClaudeHomeVisibility(
+        state,
+        user_home,
+        mcp_key="mcpServers",
+        settings_keys=("enabledPlugins", "extraKnownMarketplaces"),
+    ).apply()
+
+    document = json.loads(target.read_text(encoding="utf-8"))
+    assert document["theme"] == "auto"
+    assert document["enabledPlugins"] == {
+        "shared@market": True,
+        "state-only@market": True,
+        "user-only@market": True,
+    }
+    assert document["extraKnownMarketplaces"] == {"local": {"source": {"path": "/x"}}}
+    source_document = json.loads(source.read_text(encoding="utf-8"))
+    assert "state-only@market" not in source_document["enabledPlugins"]
+
+
+def test_claude_home_visibility_creates_settings_when_target_missing(tmp_path: Path) -> None:
+    user_home = tmp_path / ".claude"
+    user_home.mkdir()
+    (user_home / "settings.json").write_text(
+        json.dumps({"enabledPlugins": {"specflow@specflow-local": True}}),
+        encoding="utf-8",
+    )
+    state = tmp_path / "claude"
+
+    ClaudeHomeVisibility(
+        state,
+        user_home,
+        mcp_key="mcpServers",
+        settings_keys=("enabledPlugins", "extraKnownMarketplaces"),
+    ).apply()
+
+    document = json.loads((state / "settings.json").read_text(encoding="utf-8"))
+    assert document == {"enabledPlugins": {"specflow@specflow-local": True}}
+
+
+def test_claude_home_visibility_settings_keys_unchanged_keeps_file(tmp_path: Path) -> None:
+    user_home = tmp_path / ".claude"
+    user_home.mkdir()
+    (user_home / "settings.json").write_text(
+        json.dumps({"enabledPlugins": {"a@m": True}}),
+        encoding="utf-8",
+    )
+    state = tmp_path / "claude"
+    state.mkdir()
+    target = state / "settings.json"
+    original = '{"theme": "auto", "enabledPlugins": {"a@m": true}}\n'
+    target.write_text(original, encoding="utf-8")
+
+    ClaudeHomeVisibility(
+        state,
+        user_home,
+        mcp_key="mcpServers",
+        settings_keys=("enabledPlugins",),
+    ).apply()
+
+    assert target.read_text(encoding="utf-8") == original
+
+
+def test_claude_home_visibility_merges_only_configured_settings_keys(tmp_path: Path) -> None:
+    user_home = tmp_path / ".claude"
+    user_home.mkdir()
+    (user_home / "settings.json").write_text(
+        json.dumps(
+            {
+                "enabledPlugins": {"a@m": True},
+                "extraKnownMarketplaces": {"local": {}},
+            }
+        ),
+        encoding="utf-8",
+    )
+    state = tmp_path / "claude"
+
+    ClaudeHomeVisibility(
+        state,
+        user_home,
+        mcp_key="mcpServers",
+        settings_keys=("enabledPlugins",),
+    ).apply()
+
+    document = json.loads((state / "settings.json").read_text(encoding="utf-8"))
+    assert document == {"enabledPlugins": {"a@m": True}}
+
+
+def test_claude_home_visibility_ignores_invalid_settings_source(tmp_path: Path, caplog) -> None:
+    user_home = tmp_path / ".claude"
+    user_home.mkdir()
+    (user_home / "settings.json").write_text("{not-json", encoding="utf-8")
+    state = tmp_path / "claude"
+    state.mkdir()
+    target = state / "settings.json"
+    target.write_text('{"enabledPlugins": {"keep@m": true}}\n', encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="ccs_plus.home_visibility"):
+        ClaudeHomeVisibility(
+            state,
+            user_home,
+            mcp_key="mcpServers",
+            settings_keys=("enabledPlugins",),
+        ).apply()
+
+    assert "Skipping Claude settings source" in caplog.text
+    assert json.loads(target.read_text(encoding="utf-8")) == {"enabledPlugins": {"keep@m": True}}

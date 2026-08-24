@@ -30,6 +30,10 @@ def test_settings_default_homes_use_local_data(settings_root) -> None:
     assert settings.opencode.user_home == Path.home() / ".config" / "opencode"
     assert settings.opencode.user_data_home == Path.home() / ".local" / "share" / "opencode"
     assert settings.claude.visibility.mcp_key == "mcpServers"
+    assert settings.claude.visibility.settings_keys == (
+        "enabledPlugins",
+        "extraKnownMarketplaces",
+    )
     assert settings.claude.visibility.plugins.copy_names == (
         ".last_inuse_sweep",
         "blocklist.json",
@@ -203,6 +207,41 @@ def test_settings_requires_cli_visibility_keys(settings_root) -> None:
     )
 
     with pytest.raises(ProviderError, match=r"apps\.claude\.visibility\.mcp_key"):
+        load_settings(settings_root)
+
+
+def _drop_claude_settings_keys(settings_root) -> None:
+    path = settings_root / "settings.yaml"
+    lines = path.read_text(encoding="utf-8").splitlines()
+    kept = [
+        line
+        for line in lines
+        if "settings_keys:" not in line
+        and "- enabledPlugins" not in line
+        and "- extraKnownMarketplaces" not in line
+    ]
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+
+def test_settings_requires_claude_settings_keys(settings_root) -> None:
+    _drop_claude_settings_keys(settings_root)
+
+    with pytest.raises(ProviderError, match=r"apps\.claude\.visibility\.settings_keys"):
+        load_settings(settings_root)
+
+
+def test_settings_rejects_empty_claude_settings_keys(settings_root) -> None:
+    _drop_claude_settings_keys(settings_root)
+    path = settings_root / "settings.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8").replace(
+            "      mcp_key: mcpServers\n",
+            "      mcp_key: mcpServers\n      settings_keys: []\n",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProviderError, match=r"apps\.claude\.visibility\.settings_keys"):
         load_settings(settings_root)
 
 

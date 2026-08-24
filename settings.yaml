@@ -26,6 +26,13 @@ apps:
       # User-home extension policy for the isolated runtime. Directories are
       # linked entry-by-entry; named files can instead be copied or skipped.
       mcp_key: mcpServers
+      # settings.json keys projected from the user home into the isolated one.
+      # Mapping values are union-merged (user entries win). Keeping enabled plugins
+      # and local marketplaces consistent prevents the shared plugin cache sweep
+      # from orphaning plugins installed in the other home.
+      settings_keys:
+        - enabledPlugins
+        - extraKnownMarketplaces
       skills: {}
       plugins:
         copy:

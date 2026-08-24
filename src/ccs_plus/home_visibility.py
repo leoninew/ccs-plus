@@ -57,6 +57,7 @@ class DisabledHomeVisibility(HomeVisibility):
 @dataclass(frozen=True)
 class ClaudeHomeVisibility(HomeVisibility):
     mcp_key: str = ""
+    settings_keys: tuple[str, ...] = ()
     skills: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
     plugins: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
 
@@ -76,6 +77,47 @@ class ClaudeHomeVisibility(HomeVisibility):
             copy_names=self.plugins.copy_names,
         )
         self._merge_mcp_servers(self.user_home.parent / ".claude.json")
+        self._merge_settings_keys()
+
+    def _merge_settings_keys(self) -> None:
+        """Project configured keys from the user settings.json into the isolated one.
+
+        Plugin enablement and marketplace registrations must match the user home:
+        the plugin cache is a shared junction, so an isolated sweep that sees
+        fewer enabled plugins would mark the other home's cache entries orphaned.
+        """
+        if self.user_home is None or not self.settings_keys:
+            return
+        source_document = _read_json_object(
+            self.user_home / "settings.json", "Claude settings source"
+        )
+        if source_document is None:
+            return
+        additions = {
+            key: source_document[key] for key in self.settings_keys if key in source_document
+        }
+        if not additions:
+            return
+
+        target = self.state_home / "settings.json"
+        existing_document = (
+            _read_json_object(target, "Claude settings target") if target.exists() else {}
+        )
+        if existing_document is None:
+            return
+        output = dict(existing_document)
+        changed = False
+        for key, incoming in additions.items():
+            merged_value = _merged_json_value(existing_document.get(key), incoming)
+            if merged_value != existing_document.get(key):
+                changed = True
+            output[key] = merged_value
+        if not changed:
+            return
+        try:
+            _write_json_atomic(target, output)
+        except OSError as exc:
+            logger.warning("Failed to write Claude settings merge to %s: %s", target, exc)
 
     def _merge_mcp_servers(self, source: Path) -> None:
         source_document = _read_json_object(source, "Claude MCP source")
@@ -254,6 +296,7 @@ def home_visibility_for(
             state_home=state_home,
             user_home=settings.claude.user_home,
             mcp_key=settings.claude.visibility.mcp_key,
+            settings_keys=settings.claude.visibility.settings_keys,
             skills=settings.claude.visibility.skills,
             plugins=settings.claude.visibility.plugins,
         )
@@ -389,6 +432,16 @@ def _mapping_or_empty(value: object, path: Path) -> dict[str, Any] | None:
         logger.warning("Skipping visibility merge; expected an object in %s", path)
         return None
     return value
+
+
+def _merged_json_value(existing: object, incoming: object) -> object:
+    """Union-merge mapping values (incoming wins on conflict); otherwise replace."""
+    if isinstance(existing, Mapping) and isinstance(incoming, Mapping):
+        merged = dict(existing)
+        for name, value in incoming.items():
+            merged[name] = deepcopy(value)
+        return merged
+    return deepcopy(incoming)
 
 
 def _read_toml(path: Path, label: str) -> TOMLDocument | None:
