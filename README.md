@@ -99,6 +99,7 @@ Invoke-WebRequest -Uri "https://github.com/leoninew/ccs-plus/releases/latest/dow
 需要 Python 3.11+、[uv](https://docs.astral.sh/uv/)、可访问的 cc-switch 数据库，以及已安装并位于 `PATH` 中的 `claude`、`codex`、`grok` 或 `opencode` CLI。
 
 ```bash
+make deps
 make install
 make release
 ```
@@ -307,15 +308,19 @@ CLI 编排 → settings / domain → database / adapters → launcher
 ```
 
 ```bash
-make install       # uv sync --all-groups
+make deps          # uv sync --all-groups --locked --no-install-project
+make install       # uv tool install --editable . --force
 make test          # pytest
-make check         # ruff + mypy
+make check         # format check + ruff + mypy
+make check fix=1   # apply automatic format and lint fixes
+make test cov=1    # pytest + terminal/HTML coverage report
+make release       # uv build
 make binary        # 本地 PyInstaller 单文件
 ```
 
 ### 测试
 
-`make test` 运行完整 pytest 套件。`make check` 执行 Ruff 格式化、Ruff 检查和 MyPy。修改 CLI、配置或 provider 行为时，应同时补充相应测试。测试使用临时 SQLite 与临时 Home，不连接真实用户库。
+`make test` 运行完整 pytest 套件。`make test cov=1` 额外在终端显示覆盖率并生成 `htmlcov/` 报告。`make check` 执行只读的 Ruff 格式检查、Ruff 检查和 MyPy；使用 `make check fix=1` 才会应用自动修复。修改 CLI、配置或 provider 行为时，应同时补充相应测试。测试使用临时 SQLite 与临时 Home，不连接真实用户库。
 
 ### 贡献
 

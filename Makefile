@@ -1,32 +1,51 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install release test check binary
+.PHONY: help deps install check test release binary
+
+UV ?= uv
+CHECK_FIX := $(filter 1 true yes,$(fix))
+
+RUFF_FORMAT_ARGS := --check
+RUFF_CHECK_ARGS :=
+TEST_COV_ARGS :=
+
+ifneq ($(CHECK_FIX),)
+RUFF_FORMAT_ARGS :=
+RUFF_CHECK_ARGS := --fix
+endif
+
+ifneq ($(filter 1 true yes,$(cov)),)
+TEST_COV_ARGS := --cov=src/ccs_plus --cov-report=term-missing --cov-report=html:htmlcov
+endif
 
 help:
-	@echo "Common targets:"
-	@echo "  make install       Sync project and development dependencies"
-	@echo "  make release       Install this project"
-	@echo "  make test          Run the test suite"
-	@echo "  make check         Run lint and apply formatting"
-	@echo "  make binary        Build a local one-file binary with PyInstaller"
+	@printf "make deps                 Sync locked project dependencies\n"
+	@printf "make install              Install the CLI as a user editable tool\n"
+	@printf "make check [fix=1]        Check format, lint, and types\n"
+	@printf "make test [cov=1]         Run tests, optionally with coverage\n"
+	@printf "make release              Build source and wheel distributions\n"
+	@printf "make binary               Build a local one-file binary with PyInstaller\n"
+
+deps:
+	$(UV) sync --all-groups --locked --no-install-project
 
 install:
-	uv sync --all-groups
-
-release:
-	pip install -e .
+	$(UV) tool install --editable . --force
 
 test:
-	uv run pytest tests
+	$(UV) run pytest tests $(TEST_COV_ARGS)
 
 check:
-	uv run ruff format .
-	uv run ruff check .
-	uv run mypy src
+	$(UV) run ruff format $(RUFF_FORMAT_ARGS) src tests
+	$(UV) run ruff check $(RUFF_CHECK_ARGS) src tests
+	$(UV) run mypy src
+
+release:
+	$(UV) build
 
 binary:
-	uv pip install "pyinstaller>=6.11,<7"
-	uv run pyinstaller \
+	$(UV) pip install "pyinstaller>=6.11,<7"
+	$(UV) run pyinstaller \
 		--noconfirm \
 		--clean \
 		--onefile \
