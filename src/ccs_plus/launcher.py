@@ -123,6 +123,8 @@ class CodexLauncher(RuntimeLauncher):
             )
             self.env[profile.env_key] = _required(managed.api_key, "Codex API key")
             argv.extend(["--profile", profile.name])
+            # Managed API-key providers do not need the ChatGPT-backed Codex Apps MCP.
+            argv.extend(["--disable", "apps"])
             self._append_model_and_effort(argv)
             return argv
         if not self.session_id:

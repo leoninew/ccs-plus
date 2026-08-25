@@ -294,6 +294,8 @@ Claude、Grok 与 OpenCode 使用配置中的稳定 state home；Codex 直接使
 
 启动时按各 app 的 `visibility` 配置，将必要的用户 extensions 合并或链接进隔离 Home：Claude 的 skills、plugins、MCP；Grok 的 skills、plugins、hooks、installed plugins 与配置扩展；OpenCode 的 skills、plugins、agents、commands、tools、themes。Codex 不执行这类投影：子进程 `CODEX_HOME` 就是 `apps.codex.user_home`，因此其中的 MCP、plugin、skill 与 session 由原生 Codex 正常加载。ccs-plus 只在该目录写入带 ownership marker 的 provider profile，不修改基础 `config.toml`，也不传 `--cd` 或 `--add-dir`；原生工作目录始终是执行 `ccsp` 时所在目录。
 
+对于 ccs-plus 管理的第三方 Codex provider，启动时会关闭 ChatGPT 会话认证的内置 Codex Apps MCP；用户在 `config.toml` 中配置的普通 MCP 不受影响。官方 provider 保持原生 Codex Apps 行为。
+
 OpenCode 兼容 cc-switch 原生 provider 形状（`npm` / `options.baseURL` / `models`）；DB 无 OpenCode 行时会注入合成 `opencode-official`（本地 auth）。会话从 `share/opencode/opencode.db` 读取。
 
 Claude 默认 `permission_mode` 模板为 `bypassPermissions`。Grok 模板默认 `workspace` + `always_approve`。Codex 新增或导入的 provider 默认使用 `danger-full-access`；已有记录缺少权限字段时回退 `apps.codex`。OpenCode 默认 `permission_mode: allow`、`always_approve: false`。高权限仅应在可信目录和可信 provider 下使用。

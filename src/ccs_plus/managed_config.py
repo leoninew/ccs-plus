@@ -4,6 +4,7 @@ import logging
 import os
 import tempfile
 from collections.abc import Mapping, MutableMapping
+from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -58,8 +59,7 @@ class CodexManagedConfig(ManagedConfig):
             content = path.read_text(encoding="utf-8") if path.exists() else ""
             if content and marker not in content:
                 raise ProviderError(f"Refusing to overwrite unmanaged Codex profile: {path}")
-            if content:
-                self._parse(content, path)
+            existing = self._parse(content, path) if content else None
             document = tomlkit.document()
             document.add(tomlkit.comment(marker))
             document["model_provider"] = self.session_model_provider
@@ -69,6 +69,10 @@ class CodexManagedConfig(ManagedConfig):
                 document["model_reasoning_effort"] = self.effort
             document["approval_policy"] = approval_policy
             document["default_permissions"] = self._permission_profile(sandbox_mode)
+            if existing is not None:
+                projects = existing.get("projects")
+                if isinstance(projects, Mapping):
+                    document["projects"] = deepcopy(projects)
             providers = tomlkit.table()
             provider = tomlkit.table()
             provider["name"] = self.runtime.provider.name

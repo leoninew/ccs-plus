@@ -113,7 +113,7 @@ def test_codex_profile_falls_back_to_settings_policy(tmp_path) -> None:
     assert document["default_permissions"] == ":workspace"
 
 
-def test_codex_profile_removes_legacy_extension_and_project_settings(tmp_path) -> None:
+def test_codex_profile_removes_legacy_extension_and_preserves_project_trust(tmp_path) -> None:
     runtime = _runtime(AppKind.CODEX)
     profile = ensure_managed_config(runtime, tmp_path, None, None)
     path = tmp_path / f"{profile.name}.config.toml"
@@ -144,7 +144,7 @@ inherit = "all"
     document = tomlkit.parse(path.read_text(encoding="utf-8"))
 
     assert "windows" not in document
-    assert "projects" not in document
+    assert document["projects"][r"d:\workspace"]["trust_level"] == "trusted"
     assert "mcp_servers" not in document
     assert "plugins" not in document
     assert "marketplaces" not in document

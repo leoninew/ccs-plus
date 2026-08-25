@@ -132,6 +132,7 @@ def test_launch_specs_keep_secret_out_of_argv_and_use_expected_home(
     if app is AppKind.CODEX:
         assert spec.argv[spec.argv.index("--model") + 1] == "example-model"
         assert spec.argv[spec.argv.index("-c") + 1] == "model_reasoning_effort=high"
+        assert spec.argv[spec.argv.index("--disable") + 1] == "apps"
         assert "CODEX_SQLITE_HOME" not in spec.env
         assert "--sandbox" not in spec.argv
         assert "--dangerously-bypass-approvals-and-sandbox" not in spec.argv
@@ -409,6 +410,8 @@ def test_launch_overrides_provider_model_and_effort_without_native_override_args
             "native-cli",
             "--profile",
             profile_name,
+            "--disable",
+            "apps",
             "--model",
             "one-time-model",
             "-c",
@@ -616,6 +619,26 @@ command = "mks-ttyd"
     assert document["mcp_servers"]["mks-ttyd"]["command"] == "mks-ttyd"
     assert (user_home / "config.toml").read_text(encoding="utf-8") == config_before
     assert not list(app_home.glob("ccs-plus-codex-*.config.toml"))
+
+
+def test_codex_official_launch_keeps_native_apps_feature(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+    settings = make_app_settings(tmp_path, codex_user_home=tmp_path / "user-codex")
+    official = Provider(
+        id="codex-official",
+        app=AppKind.CODEX,
+        name="Codex official",
+        settings_config={},
+        endpoints=(),
+        category="official",
+        created_at=None,
+        notes=None,
+        is_current=False,
+    )
+
+    spec = build_launch_spec(official, settings, tmp_path)
+
+    assert "--disable" not in spec.argv
 
 
 def test_codex_launch_does_not_copy_project_trust_into_the_provider_profile(

@@ -28,7 +28,7 @@ Codex managed profile 的旧“保留扩展表再合并”策略已由本次单�
 
 Codex 不再使用隔离 runtime Home，也不再构造 HomeVisibility。每次 Codex launch 的 runtime Home 取 `settings.codex.user_home`（默认 `~/.codex`），并由 `CodexLauncher` 写入 `CODEX_HOME`。该目录同时承载用户基础配置、原生 MCP/plugin/skill、会话状态和 ccs-plus 受管 profile。
 
-受管 profile 仍以 provider 数据库主键命名，仍通过环境变量提供 API Key，但重建时只写 provider 必需字段。它不复制或保留 `mcp_servers`、`plugins`、`marketplaces`、`shell_environment_policy` 和 `[projects]`。这会在 profile 下次 `ensure()` 时清除历史 OS user-Home trust，不影响用户 `config.toml` 中的项目 trust。
+受管 profile 仍以 provider 数据库主键命名，仍通过环境变量提供 API Key，但重建时只写 provider 必需字段，并保留该 profile 已有的 `[projects]` trust。它不复制 `mcp_servers`、`plugins`、`marketplaces` 或 `shell_environment_policy`，也不从用户基础 `config.toml` 导入项目 trust，避免启动后重复信任确认。启动第三方 managed provider 时，launcher 额外禁用 ChatGPT 会话认证的内置 Codex Apps MCP；官方 provider 保持原生行为。
 
 因此 Codex 不链接或合并 sessions、skills、plugins、cache 或 base `config.toml`；这些路径根本不进入 visibility 代码。启动子进程继续由 `subprocess.run(..., cwd=A)` 执行，不构造 `--cd` 或 `--add-dir`。`A == Path.home()` 没有特殊处理：原生 Codex 在其唯一 user Home 中处理用户配置与 project discovery。
 
@@ -52,7 +52,7 @@ Claude 与 Grok 无论 `cwd` 是否为 `Path.home()`，均投影用户 Home 的 
 
 0. **统一 Codex 运行 Home**
 - 将 Codex launch、session 查询与 managed-profile 清理使用的 Home 统一为 `settings.codex.user_home`；不保留第二个 Codex runtime-root 配置。
-   - 删除 Codex visibility 与其配置；移除 profile 合并中对 extension tables 和 `[projects]` 的保留/投影，确保旧 profile 下次重建会清掉 OS user-Home trust。
+   - 删除 Codex visibility 与其配置；移除 profile 合并中对 extension tables 的保留/投影，仅保留 profile 自身已有的 `[projects]` trust。
    - 保持 `LaunchSpec.cwd=A` 和现有 provider/profile/API Key 注入；不得引入 `--cd`、`--add-dir`、trust 写入或真实 user `config.toml` 的改写。
 
 1. **保留 Claude/Grok 用户扩展投影**
@@ -60,7 +60,7 @@ Claude 与 Grok 无论 `cwd` 是否为 `Path.home()`，均投影用户 Home 的 
    - 当 `cwd == Path.home()` 时，Claude/Grok 继续创建并应用各自的 visibility；只有 OpenCode 保留旧的禁用分支。
 
 2. **收敛 Codex profile 与扩展路径**
-   - 修改 `CodexManagedConfig.ensure()`，只重建 ccs-plus 拥有的 provider 核心字段，不保留 extension tables 或 `projects`。
+   - 修改 `CodexManagedConfig.ensure()`，只重建 ccs-plus 拥有的 provider 核心字段，并保留 profile 自身已有的 `projects`。
    - 删除 Codex 的 state/user TOML 合并与 skills/plugins/cache 链接职责；真实 Home 基础 `config.toml` 与目录由原生 Codex 正常加载。
    - 保留 Claude/Grok 的既有目录和配置投影策略，它们不从本次 Codex 收敛中获益或受影响。
 
@@ -82,17 +82,17 @@ Claude 与 Grok 无论 `cwd` 是否为 `Path.home()`，均投影用户 Home 的 
 | 文件 | 计划变更 |
 | --- | --- |
 | `src/ccs_plus/home_visibility.py` | 保持 Claude/Grok 的可见性投影；删除 Codex extension/config/project-trust 合并路径。 |
-| `src/ccs_plus/managed_config.py` | Codex profile 仅重建 provider 核心字段，清理历史 extension tables 与 `[projects]`。 |
+| `src/ccs_plus/managed_config.py` | Codex profile 仅重建 provider 核心字段，清理历史 extension tables 并保留已有 `[projects]` trust。 |
 | `src/ccs_plus/launcher.py` | 以真实 Codex user Home 构建 `CODEX_HOME`，保持 project cwd 原样传递且不追加 `--cd`/`--add-dir`。 |
 | `src/ccs_plus/sessions.py`、`src/ccs_plus/cli.py` | 将 Codex 会话查询和受管 profile 清理切换到唯一真实 user Home。 |
 | `tests/test_home_visibility.py` | Claude/Grok 的目录与配置投影回归；Codex 不再有 visibility 测试。 |
-| `tests/test_managed_config.py` | Codex profile repeated-ensure、provider 隔离与不保留用户扩展表的测试。 |
+| `tests/test_managed_config.py` | Codex profile repeated-ensure、provider 隔离、trust 保留与不保留用户扩展表的测试。 |
 | `tests/test_launcher.py` | 三端项目 cwd、project-level facility 与 user-Home 启动回归测试。 |
 | `README.md` | 运行时隔离和扩展可见性行为说明。 |
 
 ## Verification Plan
 
-- 单元：对 Codex managed profile 连续执行两次 ensure，确认 provider 核心字段稳定，历史 extension tables 与 `[projects]` 不会保留或重新写入，API Key 不落盘。
+- 单元：对 Codex managed profile 连续执行两次 ensure，确认 provider 核心字段稳定，历史 extension tables 不会保留，已有 `[projects]` trust 保持不变，API Key 不落盘。
 - 单元：Claude、Grok 的重复 launch/config 写入后，skills、plugins、MCP 及既有 registry/索引策略不回退；临时目录仍不共享。
 - 单元：Codex launch 不链接或合并用户扩展；base config、MCP、plugin 与 skill 都只从 `CODEX_HOME=~/.codex` 的原生位置加载。
 - 单元：项目目录和 `Path.home()` 启动都保留三端 `cwd`。Codex argv 不含 `--cd`/`--add-dir`，两者使用同一真实 Codex Home；Claude/Grok 在 user Home 启动时仍投影用户 MCP、plugin 与 skill。
@@ -102,7 +102,7 @@ Claude 与 Grok 无论 `cwd` 是否为 `Path.home()`，均投影用户 Home 的 
 
 ## Assumptions and Risks
 
-- 本次明确不保留 Codex profile 的 extension tables 或 `[projects]`；这些值属于唯一真实 user Home 的 base config，而非 provider profile。Claude/Grok 仍遵循各自已接受的保留策略。
+- 本次明确不保留 Codex profile 的 extension tables；已有 `[projects]` trust 属于 Codex 运行时会写回的 profile 状态，因此由同一 profile 原样保留，但不从唯一真实 user Home 的 base config 复制。Claude/Grok 仍遵循各自已接受的保留策略。
 - 三个 CLI 的项目级发现协议会随版本改变；测试夹具必须使用已验证的原生机制，不能以 ccs-plus 私有目录约定替代。
 
 ## Rollback
