@@ -7,16 +7,12 @@ Review status: Accepted
 
 ## Requirement alignment
 
-实现与 `docs/requirement/20260823-standalone-skill-publication.md` 一致：ccs-plus 仅声明
-`ccsp-provider-manage` 独立 skill；项目内 vendored 脚本是新版规范源的完整副本，仅配置区有项目数据。
+实现与 `docs/requirement/20260823-standalone-skill-publication.md` 一致：ccs-plus 仅声明 `ccsp-provider-manage` 独立 skill；项目内 vendored 脚本是新版规范源的完整副本，仅配置区有项目数据。
 
 ## Actual diff summary
 
-- `scripts/release.py` 包含完整同步引擎；顶部配置区将 plugin 名称与路径设为 `None`，只声明
-  `ccsp-provider-manage` standalone skill；未创建 `release_config.py`、`src/plugin_release`、
-  `scripts/sync.py` 或错误拼写的 `relesae.py`。
-- `scripts/test_release.py` 是规范源测试副本，覆盖 manifest/marketplace 校验、三端选择、精确
-  plugin 操作规划与 standalone skill 叶子目录隔离，并确认未声明的 plugin 资产在写入前失败。
+- `scripts/release.py` 包含完整同步引擎；顶部配置区将 plugin 名称与路径设为 `None`，只声明 `ccsp-provider-manage` standalone skill；未创建 `release_config.py`、`src/plugin_release`、 `scripts/sync.py` 或错误拼写的 `relesae.py`。
+- `scripts/test_release.py` 是规范源测试副本，覆盖 manifest/marketplace 校验、三端选择、精确 plugin 操作规划与 standalone skill 叶子目录隔离，并确认未声明的 plugin 资产在写入前失败。
 - `Makefile release` 按 `skill check --strict` -> `pip install -e .` -> `skill apply --strict` 顺序执行。
 - README 只展示 `scripts/release.py` 的 standalone skill 管理命令。
 
@@ -53,8 +49,7 @@ Review status: Accepted
 
 ## Risks
 
-未执行 `make release` 或真实 `skill apply`，因为它们会安装当前项目并写入真实客户端 Home。
-`skill check`、`skill list` 和 `skill apply --dry-run` 已在本机三端 CLI 上验证；规范源测试在临时目录中验证了叶子目录隔离。
+未执行 `make release` 或真实 `skill apply`，因为它们会安装当前项目并写入真实客户端 Home。 `skill check`、`skill list` 和 `skill apply --dry-run` 已在本机三端 CLI 上验证；规范源测试在临时目录中验证了叶子目录隔离。
 
 规范源的格式与本仓库 lint 规则不一致。不能只在本项目副本中格式化，否则会产生分叉；应先修订规范源，再整体更新所有项目副本。
 

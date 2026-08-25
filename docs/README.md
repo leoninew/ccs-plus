@@ -9,8 +9,7 @@
 
 当前实现约束的补充指南：
 
-- [Runtime Home 可见性与权威来源](guides/runtime-home-visibility.md)：用户 Home 与受管
-  state Home 的覆盖、链接、复制和隔离边界。
+- [Runtime Home 可见性与权威来源](guides/runtime-home-visibility.md)：用户 Home 与受管 state Home 的覆盖、链接、复制和隔离边界。
 
 `docs/archive/` 保存历史需求、方案、验证记录和数据库研究。归档内容只用于追溯，不是当前规范；不要引用、修改或根据其中的旧命令和旧模块名推断当前实现。
 

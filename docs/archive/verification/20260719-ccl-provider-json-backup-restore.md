@@ -68,8 +68,7 @@ Flow mode: light / 轻量模式
 
 项目约定命令（Python + uv + Makefile/pytest/ruff/mypy）：
 
-`	ext
-uv run ruff check src tests
+`	ext uv run ruff check src tests
 # All checks passed!
 
 uv run ruff format --check src tests
@@ -84,9 +83,7 @@ uv run pytest tests/test_cc_switch.py -q
 
 副本库 smoke（`C:\Users\leon\Downloads\temp\cc-switch.db`）：
 
-`	ext
-LIVE_SMOKE_PASS backup-20260719-035100.zip providers 16 logs 52275
-`
+`	ext LIVE_SMOKE_PASS backup-20260719-035100.zip providers 16 logs 52275 `
 
 覆盖：backup 生成时间戳 zip → 篡改 providers/endpoints → restore 指定 archive 名 → 供应商数据恢复且 `proxy_request_logs` 行数不变。
 

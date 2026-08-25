@@ -19,8 +19,7 @@ Review status: Accepted
 
 ## Spec Alignment
 
-- `apps.codex.session_model_provider` 默认是 `ccs-plus-managed`；managed profile 的顶层
-  `model_provider` 与 `model_providers` table key 同步使用该配置值。
+- `apps.codex.session_model_provider` 默认是 `ccs-plus-managed`；managed profile 的顶层 `model_provider` 与 `model_providers` table key 同步使用该配置值。
 - Codex 明确拒绝 custom profile 覆写 `[model_providers.openai]`：`openai` 是保留内置 provider ID。
 - 仅有 `sessions` 指向真实用户会话目录；SQLite、profile 与其余 runtime state 留在 `data/codex`。
 - 本次不修改、迁移或识别任何旧会话记录。
@@ -37,8 +36,7 @@ Review status: Accepted
 
 ## Actual Diff Summary
 
-- ccs-plus Codex provider 共享 `apps.codex.session_model_provider` 的 non-reserved `model_provider`，使 A/B
-  `/resume` 使用同一筛选集合。
+- ccs-plus Codex provider 共享 `apps.codex.session_model_provider` 的 non-reserved `model_provider`，使 A/B `/resume` 使用同一筛选集合。
 - 未改变 `CODEX_HOME=data/codex` 与其 `sessions` directory link 行为。
 - 未加入迁移、目录存在性断言、复制或 SQLite 写入逻辑。
 
@@ -75,8 +73,7 @@ Review status: Accepted
 
 ## Scope Differences
 
-无。直接 `codex` 与 custom provider 的 `/resume` identity 无法通过 `[model_providers]` 合并，已从验收条件
-剔除；核心范围保留为 ccs-plus 的 provider A/B 切换。
+无。直接 `codex` 与 custom provider 的 `/resume` identity 无法通过 `[model_providers]` 合并，已从验收条件 剔除；核心范围保留为 ccs-plus 的 provider A/B 切换。
 
 ## Risks
 
@@ -84,5 +81,4 @@ Review status: Accepted
 
 ## Conclusion
 
-Codex 的保留 ID 约束排除了 direct/custom 三向合并；实现聚焦并满足 ccs-plus A/B 核心场景。自动化、实际
-profile 解析和用户交互式验收均已通过。
+Codex 的保留 ID 约束排除了 direct/custom 三向合并；实现聚焦并满足 ccs-plus A/B 核心场景。自动化、实际 profile 解析和用户交互式验收均已通过。

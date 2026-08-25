@@ -19,9 +19,7 @@ Flow mode: light / 轻量模式
 ## Goal
 
 1. 为每次 `ccs run` 计算稳定启动根目录，键为 **app family + provider name**（名称做路径安全化）。
-2. 目录位于系统临时区下的固定前缀，例如：
-   `{tempdir}/cc-provider-launch/{family}/{safe_provider_name}/`
-   其下仍按现有结构生成 `claude-settings.json` / `codex/` / `grok/` 等。
+2. 目录位于系统临时区下的固定前缀，例如： `{tempdir}/cc-provider-launch/{family}/{safe_provider_name}/` 其下仍按现有结构生成 `claude-settings.json` / `codex/` / `grok/` 等。
 3. 同一供应商再次 `run` 时**复用**该目录，覆盖写入本次 private 配置（auth/config/settings），**不在 ccs 退出时删除**启动目录。
 4. Codex / Grok 的 hybrid home 共享链接写入固定目录后**不再**在 launcher 退出时 detach；重复 run 时刷新已有 link-like 共享项，避免指向过期 real home。
 5. `launch_subprocess` 使用 `Popen` 启动目标 CLI，并 **wait 直到子进程退出**，回传子进程退出码；不再在成功启动后立即返回。

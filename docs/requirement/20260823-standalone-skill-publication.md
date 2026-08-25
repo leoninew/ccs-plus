@@ -7,9 +7,7 @@ Review status: Accepted
 
 ## Background
 
-`ccs-plus` 只提供 `ccsp-provider-manage` 独立 skill。同步策略由新版规范源提供，项目将其
-完整 vendoring 到 `scripts/release.py` 和 `scripts/test_release.py`；项目配置只位于
-`release.py` 顶部配置区。
+`ccs-plus` 只提供 `ccsp-provider-manage` 独立 skill。同步策略由新版规范源提供，项目将其 完整 vendoring 到 `scripts/release.py` 和 `scripts/test_release.py`；项目配置只位于 `release.py` 顶部配置区。
 
 ## Goal
 
@@ -23,14 +21,11 @@ Review status: Accepted
 
 ## Acceptance
 
-- 项目配置只声明 `skill` 资产及其 `check`、`list`、`apply`、`remove` 子命令；vendored 引擎收到未声明的
-  `plugin` 资产时必须在写入前失败。根命令与 `skill` 命令组无参时分别等价于 `--help`。
-- `make release` 依次执行 `python scripts/release.py skill check --strict`、`pip install -e .` 与
-  `python scripts/release.py skill apply --strict`；`check` 和 `apply` 均在写入前完成源和三端预检。
+- 项目配置只声明 `skill` 资产及其 `check`、`list`、`apply`、`remove` 子命令；vendored 引擎收到未声明的 `plugin` 资产时必须在写入前失败。根命令与 `skill` 命令组无参时分别等价于 `--help`。
+- `make release` 依次执行 `python scripts/release.py skill check --strict`、`pip install -e .` 与 `python scripts/release.py skill apply --strict`；`check` 和 `apply` 均在写入前完成源和三端预检。
 - 自动模式跳过缺失 CLI；显式客户端或 `--strict` 缺失时无写入失败。
 - 测试覆盖 `check`、`list`、`apply`、`remove`、`--dry-run`、显式选择与 `--strict`。
-- `scripts/release.py` 只在顶部配置区声明项目资产；其余客户端适配器、JSON 解析、Home 计算和目录
-  替换逻辑必须与规范源整体一致，不创建额外配置模块或同步器。
+- `scripts/release.py` 只在顶部配置区声明项目资产；其余客户端适配器、JSON 解析、Home 计算和目录 替换逻辑必须与规范源整体一致，不创建额外配置模块或同步器。
 
 ## Decisions
 

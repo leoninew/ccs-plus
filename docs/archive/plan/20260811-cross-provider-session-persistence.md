@@ -9,8 +9,7 @@ Review status: Accepted
 
 ## Implementation Steps
 
-1. 在 `apps.codex.session_model_provider` 配置一个稳定的非保留 custom `model_provider`，作为所有
-   managed Codex profile 的 thread identity。
+1. 在 `apps.codex.session_model_provider` 配置一个稳定的非保留 custom `model_provider`，作为所有 managed Codex profile 的 thread identity。
 2. 保留 provider profile 的独立命名及其 endpoint、模型、权限和 API Key 环境变量写入方式。
 3. 增强配置测试，明确断言 A/B profile 使用相同 custom identity，且 profile 本身仍独立。
 4. 修正文档，记录仅 sessions link 共享、`openai` 保留 ID 不能覆写，以及 direct Codex 不属于验收范围。
@@ -37,8 +36,7 @@ Review status: Accepted
 
 ## Assumptions
 
-Codex 对同一 non-reserved `model_provider` identity 的 thread 进行同一列表筛选；本机此前使用
-`ccs-plus-managed` 的 A/B 测试已支持此假设。
+Codex 对同一 non-reserved `model_provider` identity 的 thread 进行同一列表筛选；本机此前使用 `ccs-plus-managed` 的 A/B 测试已支持此假设。
 
 ## Risks
 
