@@ -831,7 +831,7 @@ def test_provider_reset_removes_deleted_codex_profiles(monkeypatch, tmp_path) ->
     result = CliRunner().invoke(main, ["provider", "reset", "codex", "--yes"])
 
     assert result.exit_code == 0
-    assert removed == [(settings.codex.home, codex.id)]
+    assert removed == [(settings.codex.user_home, codex.id)]
 
 
 def test_provider_show_renders_delete_then_redacted_add_commands(monkeypatch) -> None:
@@ -965,4 +965,4 @@ def test_provider_delete_removes_codex_profile(monkeypatch, tmp_path) -> None:
 
     assert result.exit_code == 0
     assert deleted == [(AppKind.CODEX, provider.id)]
-    assert removed == [(settings.codex.home, provider.id)]
+    assert removed == [(settings.codex.user_home, provider.id)]

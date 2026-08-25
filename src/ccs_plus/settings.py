@@ -51,12 +51,10 @@ class OpenCodeSettings:
 
 @dataclass(frozen=True)
 class CodexSettings:
-    home: Path
     user_home: Path
     session_model_provider: str
     approval_policy: str
     sandbox_mode: str
-    visibility: CodexVisibilitySettings
 
     def provider_defaults(self) -> CodexAppConfig:
         return CodexAppConfig(
@@ -71,13 +69,6 @@ class ClaudeVisibilitySettings:
     skills: EntryVisibilitySettings
     plugins: EntryVisibilitySettings
     settings_keys: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class CodexVisibilitySettings:
-    profile_extension_keys: tuple[str, ...]
-    skills: EntryVisibilitySettings
-    plugins: EntryVisibilitySettings
 
 
 @dataclass(frozen=True)
@@ -111,7 +102,6 @@ class AppSettings:
     def state_home(self, app: str) -> Path:
         values = {
             "claude": self.claude.home,
-            "codex": self.codex.home,
             "grok": self.grok.home,
             "opencode": self.opencode.home,
         }
@@ -119,6 +109,12 @@ class AppSettings:
             return values[app]
         except KeyError as exc:
             raise ProviderError(f"Unsupported state home: {app}") from exc
+
+    def runtime_home(self, app: str) -> Path:
+        """Return the root used by the native CLI subprocess."""
+        if app == "codex":
+            return self.codex.user_home
+        return self.state_home(app)
 
 
 def _resolve_path(root: Path, value: object, key: str) -> Path:
@@ -264,7 +260,6 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
             ),
         ),
         codex=CodexSettings(
-            home=_resolve_path(root, _get(config, "apps.codex.home"), "apps.codex.home"),
             user_home=_resolve_optional_user_home(
                 root,
                 _get(config, "apps.codex.user_home"),
@@ -282,15 +277,6 @@ def load_settings(project_root: Path | None = None) -> AppSettings:
             sandbox_mode=_resolve_non_empty_string(
                 _get(config, "apps.codex.sandbox_mode"),
                 "apps.codex.sandbox_mode",
-            ),
-            visibility=CodexVisibilitySettings(
-                profile_extension_keys=_resolve_name_list(
-                    _get(config, "apps.codex.visibility.profile_extension_keys"),
-                    "apps.codex.visibility.profile_extension_keys",
-                    required=True,
-                ),
-                skills=_resolve_entry_visibility(config, "apps.codex.visibility.skills"),
-                plugins=_resolve_entry_visibility(config, "apps.codex.visibility.plugins"),
             ),
         ),
         grok=GrokSettings(

@@ -13,7 +13,7 @@ from ccs_plus.sessions import list_sessions
 
 def test_list_codex_sessions_parses_rollout_meta(tmp_path: Path) -> None:
     settings = make_app_settings(tmp_path)
-    day = settings.codex.home / "sessions" / "2026" / "08" / "13"
+    day = settings.codex.user_home / "sessions" / "2026" / "08" / "13"
     day.mkdir(parents=True)
     path = day / "rollout-2026-08-13T10-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl"
     path.write_text(

@@ -12,7 +12,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from ccs_plus.domain import AppKind
-from ccs_plus.home_visibility import CodexHomeVisibility, OpenCodeHomeVisibility
+from ccs_plus.home_visibility import OpenCodeHomeVisibility
 from ccs_plus.settings import AppSettings
 
 logger = logging.getLogger(__name__)
@@ -39,13 +39,6 @@ class SessionReader:
 
 
 class CodexSessionReader(SessionReader):
-    def prepare(self, settings: AppSettings) -> None:
-        CodexHomeVisibility(
-            settings.codex.home,
-            settings.codex.user_home,
-            profile_extension_keys=settings.codex.visibility.profile_extension_keys,
-        ).expose_sessions()
-
     def list(self, home: Path, app: AppKind) -> list[Session]:
         return _list_rollouts(home, app)
 
@@ -85,7 +78,7 @@ def session_reader_for(app: AppKind) -> SessionReader:
 
 def list_sessions(settings: AppSettings, app: AppKind) -> list[Session]:
     """Return recent sessions for ``app``, newest first."""
-    home = settings.state_home(app.value)
+    home = settings.runtime_home(app.value)
     reader = session_reader_for(app)
     try:
         reader.prepare(settings)

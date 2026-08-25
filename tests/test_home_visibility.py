@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import stat
 from pathlib import Path
 
 import pytest
@@ -12,15 +11,12 @@ import tomlkit
 from ccs_plus.domain import (
     AppKind,
     ClaudeRuntime,
-    CodexRuntime,
     GrokRuntime,
     OpenCodeRuntime,
     Provider,
 )
 from ccs_plus.home_visibility import (
     ClaudeHomeVisibility,
-    CodexHomeVisibility,
-    DisabledHomeVisibility,
     GrokHomeVisibility,
     OpenCodeHomeVisibility,
     _is_link,
@@ -31,17 +27,7 @@ from ccs_plus.home_visibility import (
 )
 from ccs_plus.settings import EntryVisibilitySettings
 
-_CODEX_PROFILE_EXTENSION_KEYS = (
-    "mcp_servers",
-    "plugins",
-    "marketplaces",
-    "shell_environment_policy",
-)
 _GROK_EXTENSION_KEYS = ("mcp_servers", "skills", "plugins", "marketplace", "hooks")
-_CODEX_SKILLS = EntryVisibilitySettings(skip_names=(".system",))
-_CODEX_PLUGINS = EntryVisibilitySettings(
-    skip_names=(".plugin-appserver", ".remote-plugin-install-staging")
-)
 _GROK_HOOKS = EntryVisibilitySettings(copy_names=("orca-status.json",))
 _GROK_INSTALLED_PLUGINS = EntryVisibilitySettings(copy_names=("registry.json",))
 
@@ -74,7 +60,6 @@ def test_home_visibility_factory_selects_runtime_implementation(
     settings = app_settings(tmp_path)
 
     claude = home_visibility_for(_runtime(ClaudeRuntime, AppKind.CLAUDE), settings, tmp_path)
-    codex = home_visibility_for(_runtime(CodexRuntime, AppKind.CODEX), settings, tmp_path)
     grok = home_visibility_for(_runtime(GrokRuntime, AppKind.GROK), settings, tmp_path)
     opencode = home_visibility_for(_runtime(OpenCodeRuntime, AppKind.OPENCODE), settings, tmp_path)
 
@@ -82,9 +67,6 @@ def test_home_visibility_factory_selects_runtime_implementation(
     assert claude.mcp_key == settings.claude.visibility.mcp_key
     assert claude.settings_keys == settings.claude.visibility.settings_keys
     assert claude.plugins == settings.claude.visibility.plugins
-    assert isinstance(codex, CodexHomeVisibility)
-    assert codex.profile_extension_keys == settings.codex.visibility.profile_extension_keys
-    assert codex.skills == settings.codex.visibility.skills
     assert isinstance(grok, GrokHomeVisibility)
     assert grok.extension_keys == settings.grok.visibility.extension_keys
     assert grok.hooks == settings.grok.visibility.hooks
@@ -114,26 +96,6 @@ def test_opencode_official_visibility_exposes_user_data(tmp_path: Path) -> None:
         encoding="utf-8"
     ) == '{"provider": "local"}\n'
     assert (visibility.state_home / "share" / "opencode" / "opencode.db").read_bytes() == b"sqlite"
-
-
-def test_disabled_codex_visibility_keeps_profile_extension_policy(
-    tmp_path: Path, app_settings
-) -> None:
-    settings = app_settings(tmp_path)
-
-    visibility = home_visibility_for(
-        _runtime(CodexRuntime, AppKind.CODEX),
-        settings,
-        tmp_path,
-        enabled=False,
-    )
-    assert isinstance(
-        home_visibility_for(_runtime(OpenCodeRuntime, AppKind.OPENCODE), settings, tmp_path),
-        OpenCodeHomeVisibility,
-    )
-
-    assert isinstance(visibility, DisabledHomeVisibility)
-    assert visibility.profile_extension_keys == settings.codex.visibility.profile_extension_keys
 
 
 def test_link_user_entries_links_each_child_not_the_parent(tmp_path: Path) -> None:
@@ -295,81 +257,6 @@ def test_claude_home_visibility_uses_plugin_name_sets(tmp_path: Path) -> None:
     assert _is_link(state_home / "plugins" / "marketplaces")
     assert _links_to(state_home / "plugins" / "marketplaces", plugins / "marketplaces")
     assert not (state_home / "plugins" / "plugin-catalog-cache.json").exists()
-
-
-def test_codex_home_visibility_shares_plugin_cache_and_skips_runtime_directories(
-    tmp_path: Path,
-) -> None:
-    user_home = tmp_path / "user-codex"
-    state_home = tmp_path / "state-codex"
-    (user_home / "plugins" / "cache").mkdir(parents=True)
-    (user_home / "plugins" / ".plugin-appserver").mkdir()
-    (user_home / "plugins" / ".remote-plugin-install-staging").mkdir()
-
-    CodexHomeVisibility(
-        state_home,
-        user_home,
-        profile_extension_keys=_CODEX_PROFILE_EXTENSION_KEYS,
-        skills=_CODEX_SKILLS,
-        plugins=_CODEX_PLUGINS,
-    ).apply()
-
-    state_cache = state_home / "plugins" / "cache"
-    assert _is_link(state_cache)
-    assert _links_to(state_cache, user_home / "plugins" / "cache")
-    assert not (state_home / "plugins" / ".plugin-appserver").exists()
-    assert not (state_home / "plugins" / ".remote-plugin-install-staging").exists()
-
-
-def test_codex_home_visibility_replaces_existing_plugin_cache(tmp_path: Path) -> None:
-    user_home = tmp_path / "user-codex"
-    state_home = tmp_path / "state-codex"
-    user_cache = user_home / "plugins" / "cache"
-    (user_cache / "local" / "plugin" / ".codex-plugin").mkdir(parents=True)
-    (user_cache / "local" / "plugin" / ".codex-plugin" / "plugin.json").write_text(
-        '{"name": "plugin"}\n', encoding="utf-8"
-    )
-    stale_cache = state_home / "plugins" / "cache"
-    (stale_cache / "local" / "plugin" / "partial-package").mkdir(parents=True)
-    readonly_object = stale_cache / "local" / "plugin" / "partial-package" / "git-object"
-    readonly_object.write_text("stale", encoding="utf-8")
-    readonly_object.chmod(stat.S_IREAD)
-
-    CodexHomeVisibility(
-        state_home,
-        user_home,
-        profile_extension_keys=_CODEX_PROFILE_EXTENSION_KEYS,
-        skills=_CODEX_SKILLS,
-        plugins=_CODEX_PLUGINS,
-    ).apply()
-
-    assert _is_link(stale_cache)
-    assert _links_to(stale_cache, user_cache)
-    assert (stale_cache / "local" / "plugin" / ".codex-plugin" / "plugin.json").is_file()
-    assert not (stale_cache / "local" / "plugin" / "partial-package").exists()
-
-
-def test_codex_home_visibility_keeps_registered_plugin_cache(tmp_path) -> None:
-    user_home = tmp_path / "user-codex"
-    cache = user_home / "plugins" / "cache" / "local-marketplace"
-    (cache / "example-plugin" / "1.0.0").mkdir(parents=True)
-    visibility = CodexHomeVisibility(
-        tmp_path / "state-codex",
-        user_home,
-        profile_extension_keys=_CODEX_PROFILE_EXTENSION_KEYS,
-        skills=_CODEX_SKILLS,
-        plugins=_CODEX_PLUGINS,
-    )
-    document = tomlkit.document()
-    plugins = tomlkit.table()
-    plugin = tomlkit.table()
-    plugin["enabled"] = True
-    plugins["example-plugin@local-marketplace"] = plugin
-    document["plugins"] = plugins
-
-    visibility.merge_into(document)
-
-    assert (cache / "example-plugin").is_dir()
 
 
 def test_grok_home_visibility_exposes_extensions_and_config(tmp_path: Path) -> None:
@@ -555,41 +442,6 @@ def test_link_user_entries_copy_keeps_existing_link(tmp_path: Path) -> None:
 
     assert existing.is_symlink()
     assert _links_to(existing, payload)
-
-
-def test_codex_home_visibility_links_only_the_session_directory(tmp_path: Path) -> None:
-    user_home = tmp_path / "user-codex"
-    state_home = tmp_path / "state-codex"
-
-    CodexHomeVisibility(state_home, user_home).expose_sessions()
-
-    source = user_home / "sessions"
-    target = state_home / "sessions"
-    assert source.is_dir()
-    assert target.is_dir()
-    assert _is_link(target)
-    assert _links_to(target, source)
-    assert not _is_link(state_home)
-    (target / "created-by-runtime.jsonl").write_text("session", encoding="utf-8")
-    assert (source / "created-by-runtime.jsonl").read_text(encoding="utf-8") == "session"
-
-
-def test_codex_home_visibility_replaces_existing_session_directory(tmp_path: Path) -> None:
-    user_home = tmp_path / "user-codex"
-    state_home = tmp_path / "state-codex"
-    user_sessions = user_home / "sessions"
-    user_sessions.mkdir(parents=True)
-    (user_sessions / "user.jsonl").write_text("user", encoding="utf-8")
-    existing = state_home / "sessions"
-    existing.mkdir(parents=True)
-    marker = existing / "stale.jsonl"
-    marker.write_text("state", encoding="utf-8")
-
-    CodexHomeVisibility(state_home, user_home).expose_sessions()
-
-    assert _is_link(existing)
-    assert _links_to(existing, user_home / "sessions")
-    assert not marker.exists()
 
 
 def test_claude_home_visibility_merges_user_mcp_over_existing(tmp_path: Path) -> None:

@@ -234,7 +234,7 @@ def reset_providers(app_name: str | None, yes: bool) -> None:
                 click.echo(f"- {provider.app.value}/{provider.name}")
             return
         deleted = repository.reset_non_official(apps)
-        codex_home = _settings().codex.home
+        codex_home = _settings().codex.user_home
         for provider in targets:
             if provider.app.has_managed_profile_files:
                 remove_managed_config(codex_home, provider.id)
@@ -273,7 +273,7 @@ def delete_provider(app_name: str, name: str, yes: bool) -> None:
         provider = repository.get_by_name(app, name)
         repository.delete(app, provider.id)
         if provider.app.has_managed_profile_files:
-            remove_managed_config(_settings().codex.home, provider.id)
+            remove_managed_config(_settings().codex.user_home, provider.id)
         click.echo(f"Deleted {app_name} provider {provider.name} from the database.")
     except ProviderError as exc:
         raise click.ClickException(str(exc)) from exc

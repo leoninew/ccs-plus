@@ -18,7 +18,7 @@ from ccs_plus.domain import (
     RuntimeConfig,
     validate_launch_options,
 )
-from ccs_plus.home_visibility import HomeVisibility, home_visibility_for
+from ccs_plus.home_visibility import home_visibility_for
 from ccs_plus.managed_config import ensure_managed_config
 from ccs_plus.sessions import Session
 from ccs_plus.settings import AppSettings, environment_with_defaults
@@ -45,7 +45,7 @@ class LaunchSpec:
 class RuntimeLauncher:
     executable: str
     env: dict[str, str]
-    state_home: Path
+    runtime_home: Path
     model: str | None
     effort: str | None
     session_id: str | None
@@ -61,7 +61,7 @@ class ClaudeLauncher(RuntimeLauncher):
 
     def build(self) -> list[str]:
         _clear(self.env, "CLAUDE_CONFIG_DIR")
-        self.env["CLAUDE_CONFIG_DIR"] = str(self.state_home)
+        self.env["CLAUDE_CONFIG_DIR"] = str(self.runtime_home)
         _clear(
             self.env,
             "ANTHROPIC_BASE_URL",
@@ -103,11 +103,10 @@ class CodexLauncher(RuntimeLauncher):
     session_model_provider: str
     approval_policy: str
     sandbox_mode: str
-    visibility: HomeVisibility
 
     def build(self) -> list[str]:
         _clear(self.env, "CODEX_HOME", "CODEX_SQLITE_HOME")
-        self.env["CODEX_HOME"] = str(self.state_home)
+        self.env["CODEX_HOME"] = str(self.runtime_home)
         argv = [self.executable]
         if self.session_id:
             argv.extend(["resume", self.session_id])
@@ -115,13 +114,12 @@ class CodexLauncher(RuntimeLauncher):
         if managed is not None:
             profile = ensure_managed_config(
                 managed,
-                self.state_home,
+                self.runtime_home,
                 self.model,
                 self.effort,
                 session_model_provider=self.session_model_provider,
                 approval_policy=self.approval_policy,
                 sandbox_mode=self.sandbox_mode,
-                visibility=self.visibility,
             )
             self.env[profile.env_key] = _required(managed.api_key, "Codex API key")
             argv.extend(["--profile", profile.name])
@@ -147,13 +145,13 @@ class GrokLauncher(RuntimeLauncher):
 
     def build(self) -> list[str]:
         _clear(self.env, "GROK_HOME", "GROK_MODELS_BASE_URL", "GROK_MODELS_LIST_URL")
-        self.env["GROK_HOME"] = str(self.state_home)
+        self.env["GROK_HOME"] = str(self.runtime_home)
         argv = [self.executable]
         if self.session_id:
             argv.extend(["--resume", self.session_id])
         managed = None if self.runtime.provider.is_official else self.runtime
         if managed is not None:
-            profile = ensure_managed_config(managed, self.state_home, self.model, self.effort)
+            profile = ensure_managed_config(managed, self.runtime_home, self.model, self.effort)
             self.env[profile.env_key] = _required(managed.api_key, "Grok API key")
             argv.extend(["--model", profile.name])
         elif self.model:
@@ -173,9 +171,9 @@ class OpenCodeLauncher(RuntimeLauncher):
     always_approve: bool
 
     def build(self) -> list[str]:
-        # OpenCode resolves config/data via XDG; isolate under state_home.
-        data_home = self.state_home / "share"
-        config_home = self.state_home / "config"
+        # OpenCode resolves config/data via XDG; isolate under runtime_home.
+        data_home = self.runtime_home / "share"
+        config_home = self.runtime_home / "config"
         data_home.mkdir(parents=True, exist_ok=True)
         config_home.mkdir(parents=True, exist_ok=True)
         _clear(
@@ -200,9 +198,7 @@ class OpenCodeLauncher(RuntimeLauncher):
             self.env["OPENCODE_CONFIG_CONTENT"] = content
         else:
             # Official / local auth: only inject permission override.
-            self.env["OPENCODE_CONFIG_CONTENT"] = _opencode_permission_content(
-                self.permission_mode
-            )
+            self.env["OPENCODE_CONFIG_CONTENT"] = _opencode_permission_content(self.permission_mode)
 
         argv = [self.executable]
         if self.session_id:
@@ -307,15 +303,17 @@ def build_launch_spec(
         )
     env = environment_with_defaults()
     _apply_proxy(env, settings.proxy)
-    state_home = settings.state_home(provider.app.value)
-    visibility = home_visibility_for(
-        runtime,
-        settings,
-        state_home,
-        project_directory=working_directory,
-        enabled=not _is_user_home_directory(working_directory),
-    )
-    visibility.apply()
+    runtime_home = settings.runtime_home(provider.app.value)
+    if not isinstance(runtime, CodexRuntime):
+        visibility = home_visibility_for(
+            runtime,
+            settings,
+            runtime_home,
+            enabled=not (
+                isinstance(runtime, OpenCodeRuntime) and _is_user_home_directory(working_directory)
+            ),
+        )
+        visibility.apply()
     model = model_override or runtime.model
     effort = effort_override or runtime.effort
     session_id = resume.session_id if resume is not None else None
@@ -324,12 +322,11 @@ def build_launch_spec(
         runtime,
         executable=executable,
         env=env,
-        state_home=state_home,
+        runtime_home=runtime_home,
         model=model,
         effort=effort,
         session_id=session_id,
         settings=settings,
-        visibility=visibility,
     )
     argv = launcher.build()
     return LaunchSpec(argv=tuple(argv), cwd=working_directory, env=env)
@@ -340,18 +337,17 @@ def runtime_launcher_for(
     *,
     executable: str,
     env: dict[str, str],
-    state_home: Path,
+    runtime_home: Path,
     model: str | None,
     effort: str | None,
     session_id: str | None,
     settings: AppSettings,
-    visibility: HomeVisibility,
 ) -> RuntimeLauncher:
     if isinstance(runtime, ClaudeRuntime):
         return ClaudeLauncher(
             executable=executable,
             env=env,
-            state_home=state_home,
+            runtime_home=runtime_home,
             model=model,
             effort=effort,
             session_id=session_id,
@@ -362,7 +358,7 @@ def runtime_launcher_for(
         return CodexLauncher(
             executable=executable,
             env=env,
-            state_home=state_home,
+            runtime_home=runtime_home,
             model=model,
             effort=effort,
             session_id=session_id,
@@ -370,13 +366,12 @@ def runtime_launcher_for(
             session_model_provider=settings.codex.session_model_provider,
             approval_policy=_required(runtime.approval_policy, "Codex approval_policy"),
             sandbox_mode=_required(runtime.sandbox_mode, "Codex sandbox_mode"),
-            visibility=visibility,
         )
     if isinstance(runtime, GrokRuntime):
         return GrokLauncher(
             executable=executable,
             env=env,
-            state_home=state_home,
+            runtime_home=runtime_home,
             model=model,
             effort=effort,
             session_id=session_id,
@@ -388,7 +383,7 @@ def runtime_launcher_for(
         return OpenCodeLauncher(
             executable=executable,
             env=env,
-            state_home=state_home,
+            runtime_home=runtime_home,
             model=model,
             effort=effort,
             session_id=session_id,

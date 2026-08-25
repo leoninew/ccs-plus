@@ -11,7 +11,6 @@ from conftest import make_app_settings
 
 from ccs_plus.adapters import build_provider
 from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider, ProviderError
-from ccs_plus.home_visibility import _is_link, _links_to
 from ccs_plus.launcher import LaunchSpec, _is_user_home_directory, build_launch_spec, launch
 from ccs_plus.settings import AppSettings
 
@@ -98,10 +97,10 @@ def test_launch_specs_keep_secret_out_of_argv_and_use_expected_home(
 
     assert "launch-secret-key" not in spec.argv
     assert all(argument in spec.argv for argument in required_args)
-    state_home = settings.state_home(app.value)
+    runtime_home = settings.runtime_home(app.value)
     if app is AppKind.OPENCODE:
-        assert spec.env["XDG_DATA_HOME"] == str(state_home / "share")
-        assert spec.env["XDG_CONFIG_HOME"] == str(state_home / "config")
+        assert spec.env["XDG_DATA_HOME"] == str(runtime_home / "share")
+        assert spec.env["XDG_CONFIG_HOME"] == str(runtime_home / "config")
         assert "launch-secret-key" in spec.env["OPENCODE_CONFIG_CONTENT"]
         assert '"permission":"allow"' in spec.env["OPENCODE_CONFIG_CONTENT"]
         assert spec.argv[spec.argv.index("--variant") + 1] == "high"
@@ -114,7 +113,7 @@ def test_launch_specs_keep_secret_out_of_argv_and_use_expected_home(
         AppKind.GROK: "GROK_HOME",
     }
     state_key = state_keys[app]
-    expected_home = state_home
+    expected_home = runtime_home
     assert spec.env[state_key] == str(expected_home)
     assert spec.cwd == tmp_path.resolve()
     if app is AppKind.GROK:
@@ -549,7 +548,7 @@ def test_launch_returns_child_exit_code(monkeypatch, tmp_path) -> None:
     assert captured["kwargs"] == {"cwd": tmp_path, "env": {}, "check": False}
 
 
-def test_codex_launch_links_skills_and_merges_user_config(tmp_path, monkeypatch) -> None:
+def test_codex_launch_uses_the_real_user_home_without_projection(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
     user_home = tmp_path / "user-codex"
     (user_home / "skills" / "pomelo-db").mkdir(parents=True)
@@ -563,22 +562,27 @@ command = "mks-ttyd"
         encoding="utf-8",
     )
     settings = make_app_settings(tmp_path, codex_user_home=user_home)
+    config_before = (user_home / "config.toml").read_text(encoding="utf-8")
 
     spec = build_launch_spec(_provider(AppKind.CODEX), settings, tmp_path)
 
     app_home = Path(spec.env["CODEX_HOME"])
     skills = app_home / "skills"
+    assert app_home == user_home
     assert (skills / "pomelo-db").exists()
-    assert not (skills / ".system").exists()
-    cache = app_home / "plugins" / "cache"
-    assert _is_link(cache)
-    assert _links_to(cache, user_home / "plugins" / "cache")
+    assert (skills / ".system").exists()
+    assert (app_home / "plugins" / "cache").is_dir()
+    assert (user_home / "config.toml").read_text(encoding="utf-8") == config_before
     profile_name = spec.argv[spec.argv.index("--profile") + 1]
     profile_text = (app_home / f"{profile_name}.config.toml").read_text(encoding="utf-8")
-    assert "mks-ttyd" in profile_text
+    assert "mks-ttyd" not in profile_text
+    assert "--cd" not in spec.argv
+    assert "--add-dir" not in spec.argv
 
 
-def test_codex_direct_launch_links_and_merges_config(tmp_path, monkeypatch) -> None:
+def test_codex_direct_launch_uses_the_real_user_config_without_writing_it(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
     user_home = tmp_path / "user-codex"
     (user_home / "skills" / "specflow").mkdir(parents=True)
@@ -590,6 +594,7 @@ command = "mks-ttyd"
         encoding="utf-8",
     )
     settings = make_app_settings(tmp_path, codex_user_home=user_home)
+    config_before = (user_home / "config.toml").read_text(encoding="utf-8")
     official = Provider(
         id="codex-official",
         app=AppKind.CODEX,
@@ -605,13 +610,17 @@ command = "mks-ttyd"
     spec = build_launch_spec(official, settings, tmp_path)
     app_home = Path(spec.env["CODEX_HOME"])
 
+    assert app_home == user_home
     assert (app_home / "skills" / "specflow").exists()
     document = tomlkit.parse((app_home / "config.toml").read_text(encoding="utf-8"))
     assert document["mcp_servers"]["mks-ttyd"]["command"] == "mks-ttyd"
+    assert (user_home / "config.toml").read_text(encoding="utf-8") == config_before
     assert not list(app_home.glob("ccs-plus-codex-*.config.toml"))
 
 
-def test_codex_launch_copies_current_project_trust_for_mcp(tmp_path, monkeypatch) -> None:
+def test_codex_launch_does_not_copy_project_trust_into_the_provider_profile(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
     user_home = tmp_path / "user-codex"
     user_home.mkdir()
@@ -626,55 +635,13 @@ command = "demo"
         encoding="utf-8",
     )
     settings = make_app_settings(tmp_path, codex_user_home=user_home)
-    official = Provider(
-        id="codex-official",
-        app=AppKind.CODEX,
-        name="Codex official",
-        settings_config={},
-        endpoints=(),
-        category="official",
-        created_at=None,
-        notes=None,
-        is_current=False,
-    )
+    spec = build_launch_spec(_provider(AppKind.CODEX), settings, tmp_path)
+    profile_name = spec.argv[spec.argv.index("--profile") + 1]
+    profile = tomlkit.parse((user_home / f"{profile_name}.config.toml").read_text(encoding="utf-8"))
 
-    build_launch_spec(official, settings, tmp_path)
-
-    document = tomlkit.parse((settings.codex.home / "config.toml").read_text(encoding="utf-8"))
-    assert document["projects"][tmp_path.as_posix()]["trust_level"] == "trusted"
-
-
-def test_codex_launch_copies_ancestor_project_trust_for_mcp(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
-    project = tmp_path / "repo"
-    working_directory = project / "src"
-    working_directory.mkdir(parents=True)
-    user_home = tmp_path / "user-codex"
-    user_home.mkdir()
-    (user_home / "config.toml").write_text(
-        f"""
-[projects.'{project.as_posix()}']
-trust_level = "trusted"
-""",
-        encoding="utf-8",
-    )
-    settings = make_app_settings(tmp_path, codex_user_home=user_home)
-    official = Provider(
-        id="codex-official",
-        app=AppKind.CODEX,
-        name="Codex official",
-        settings_config={},
-        endpoints=(),
-        category="official",
-        created_at=None,
-        notes=None,
-        is_current=False,
-    )
-
-    build_launch_spec(official, settings, working_directory)
-
-    document = tomlkit.parse((settings.codex.home / "config.toml").read_text(encoding="utf-8"))
-    assert document["projects"][project.as_posix()]["trust_level"] == "trusted"
+    assert spec.env["CODEX_HOME"] == str(user_home)
+    assert "projects" not in profile
+    assert "mcp_servers" not in profile
 
 
 @pytest.mark.parametrize("app", (AppKind.CODEX, AppKind.GROK))
@@ -700,14 +667,13 @@ def test_launch_specs_share_the_app_home_across_providers(tmp_path, monkeypatch,
     home_key = "CODEX_HOME" if app is AppKind.CODEX else "GROK_HOME"
     first_home = Path(first_spec.env[home_key])
     second_home = Path(second_spec.env[home_key])
-    shared = settings.state_home(app.value) / "sessions"
+    shared = settings.runtime_home(app.value) / "sessions"
     assert first_home == shared.parent
     assert second_home == shared.parent
     if app is AppKind.CODEX:
         sessions = first_home / "sessions"
-        assert sessions.is_dir()
-        assert _is_link(sessions)
-        assert _links_to(sessions, settings.codex.user_home / "sessions")
+        assert first_home == settings.codex.user_home
+        assert not sessions.exists()
         assert "CODEX_SQLITE_HOME" not in first_spec.env
         assert "CODEX_SQLITE_HOME" not in second_spec.env
         first_profile = first_spec.argv[first_spec.argv.index("--profile") + 1]
@@ -791,23 +757,38 @@ command = "state"
     assert document["mcp_servers"]["user-only"]["command"] == "user"
 
 
-@pytest.mark.parametrize("app", AppKind)
-def test_launch_from_user_home_disables_home_visibility(
+def test_opencode_launch_from_user_home_disables_home_visibility(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-cli")
+    monkeypatch.setattr("ccs_plus.launcher._is_user_home_directory", lambda _: True)
+    settings = make_app_settings(tmp_path)
+    user_home = settings.opencode.user_home
+    assert user_home is not None
+    (user_home / "skills" / "shared-skill").mkdir(parents=True)
+
+    spec = build_launch_spec(_provider(AppKind.OPENCODE), settings, user_home)
+
+    assert spec.cwd == user_home.resolve()
+    state_home = settings.state_home(AppKind.OPENCODE.value)
+    assert not (state_home / "config" / "opencode" / "skills" / "shared-skill").exists()
+
+
+@pytest.mark.parametrize("app", (AppKind.CLAUDE, AppKind.GROK))
+def test_launch_from_user_home_keeps_user_extension_visibility(
     tmp_path, monkeypatch, app: AppKind
 ) -> None:
     monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-cli")
     monkeypatch.setattr("ccs_plus.launcher._is_user_home_directory", lambda _: True)
     settings = make_app_settings(tmp_path)
-    user_homes = {
-        AppKind.CLAUDE: settings.claude.user_home,
-        AppKind.CODEX: settings.codex.user_home,
-        AppKind.GROK: settings.grok.user_home,
-        AppKind.OPENCODE: settings.opencode.user_home,
-    }
-    user_home = user_homes[app]
+    user_home = settings.claude.user_home if app is AppKind.CLAUDE else settings.grok.user_home
     assert user_home is not None
     (user_home / "skills" / "shared-skill").mkdir(parents=True)
-    if app is AppKind.CODEX or app is AppKind.GROK:
+    (user_home / "plugins" / "shared-plugin").mkdir(parents=True)
+    if app is AppKind.CLAUDE:
+        (user_home.parent / ".claude.json").write_text(
+            json.dumps({"mcpServers": {"user-only": {"command": "user"}}}),
+            encoding="utf-8",
+        )
+    else:
         (user_home / "config.toml").write_text(
             """
 [mcp_servers.user-only]
@@ -816,22 +797,48 @@ command = "user"
             encoding="utf-8",
         )
 
-    spec = build_launch_spec(_provider(app), settings, tmp_path)
+    spec = build_launch_spec(_provider(app), settings, user_home)
 
     state_home = settings.state_home(app.value)
-    if app is AppKind.OPENCODE:
-        assert not (state_home / "config" / "opencode" / "skills" / "shared-skill").exists()
+    assert spec.cwd == user_home.resolve()
+    assert (state_home / "skills" / "shared-skill").exists()
+    assert (state_home / "plugins" / "shared-plugin").exists()
+    if app is AppKind.CLAUDE:
+        document = json.loads((state_home / ".claude.json").read_text(encoding="utf-8"))
+        assert document["mcpServers"]["user-only"]["command"] == "user"
     else:
-        assert not (state_home / "skills" / "shared-skill").exists()
-    if app is AppKind.CODEX:
-        profile = spec.argv[spec.argv.index("--profile") + 1]
-        document = tomlkit.parse(
-            (state_home / f"{profile}.config.toml").read_text(encoding="utf-8")
-        )
-        assert "mcp_servers" not in document
-    elif app is AppKind.GROK:
         document = tomlkit.parse((state_home / "config.toml").read_text(encoding="utf-8"))
-        assert "mcp_servers" not in document
+        assert document["mcp_servers"]["user-only"]["command"] == "user"
+
+
+def test_codex_launch_from_user_home_needs_no_special_visibility_path(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setattr("ccs_plus.launcher.shutil.which", lambda _: "native-codex")
+    monkeypatch.setattr("ccs_plus.launcher._is_user_home_directory", lambda _: True)
+    user_home = tmp_path / "user-codex"
+    (user_home / "skills" / "shared-skill").mkdir(parents=True)
+    (user_home / "plugins" / "cache").mkdir(parents=True)
+    config = user_home / "config.toml"
+    config.write_text(
+        'notify = ["notify-user"]\n\n[mcp_servers.user]\ncommand = "user"\n',
+        encoding="utf-8",
+    )
+    settings = make_app_settings(tmp_path, codex_user_home=user_home)
+
+    spec = build_launch_spec(_provider(AppKind.CODEX), settings, user_home)
+
+    profile_name = spec.argv[spec.argv.index("--profile") + 1]
+    profile = tomlkit.parse((user_home / f"{profile_name}.config.toml").read_text(encoding="utf-8"))
+    assert spec.cwd == user_home.resolve()
+    assert spec.env["CODEX_HOME"] == str(user_home)
+    assert (user_home / "skills" / "shared-skill").exists()
+    assert (user_home / "plugins" / "cache").is_dir()
+    assert "--cd" not in spec.argv
+    assert "--add-dir" not in spec.argv
+    assert "notify" not in profile
+    assert "mcp_servers" not in profile
+    assert config.read_text(encoding="utf-8").startswith('notify = ["notify-user"]')
 
 
 def test_user_home_detection_does_not_match_descendant_projects(tmp_path) -> None:

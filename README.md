@@ -144,7 +144,7 @@ python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().d
 
 ```text
 CCS_PLUS_DATABASE__PATH=~/.cc-switch/cc-switch.db
-CCS_PLUS_APPS__CODEX__HOME=data/codex
+CCS_PLUS_APPS__CODEX__USER_HOME=~/.codex
 CCS_PLUS_PROXY=http://127.0.0.1:7890
 ```
 
@@ -282,16 +282,16 @@ make binary    # dist/ccs-plus（Windows: dist/ccs-plus.exe）
 
 ## 运行模型
 
-每种 CLI 使用配置中的稳定 state home，因此切换 provider 不会替换原生会话目录：
+Claude、Grok 与 OpenCode 使用配置中的稳定 state home；Codex 直接使用真实 user Home，因此切换 provider 不会替换原生会话目录：
 
 | CLI | 状态目录 | provider 配置方式 |
 | --- | --- | --- |
 | Claude | `apps.claude.home` | 环境变量 + 稳定 `CLAUDE_CONFIG_DIR` |
-| Codex | `apps.codex.home` | 每个 provider 的 ccs-plus managed profile；统一会话 provider 标识 |
+| Codex | `apps.codex.user_home`（默认 `~/.codex`） | 在真实 Home 中创建每个 provider 的 ccs-plus managed profile；统一会话 provider 标识 |
 | Grok | `apps.grok.home` | managed model profile |
 | OpenCode | `apps.opencode.home` | 隔离 `XDG_DATA_HOME` / `XDG_CONFIG_HOME` + `OPENCODE_CONFIG_CONTENT` |
 
-启动时按各 app 的 `visibility` 配置，将必要的用户 extensions 合并或链接进隔离 Home：Claude 的 skills、plugins、MCP；Codex 的 sessions、skills、plugins（包括已注册 plugin 的 cache）与配置扩展；Grok 的 skills、plugins、hooks、installed plugins 与配置扩展；OpenCode 的 skills、plugins、agents、commands、tools、themes。不会将整个用户 Home 直接替换为隔离 Home。Codex 仅隔离 provider 配置、认证和 plugin appserver/install staging 等运行时目录，不保留第二份 plugin 或 skill 内容。
+启动时按各 app 的 `visibility` 配置，将必要的用户 extensions 合并或链接进隔离 Home：Claude 的 skills、plugins、MCP；Grok 的 skills、plugins、hooks、installed plugins 与配置扩展；OpenCode 的 skills、plugins、agents、commands、tools、themes。Codex 不执行这类投影：子进程 `CODEX_HOME` 就是 `apps.codex.user_home`，因此其中的 MCP、plugin、skill 与 session 由原生 Codex 正常加载。ccs-plus 只在该目录写入带 ownership marker 的 provider profile，不修改基础 `config.toml`，也不传 `--cd` 或 `--add-dir`；原生工作目录始终是执行 `ccsp` 时所在目录。
 
 OpenCode 兼容 cc-switch 原生 provider 形状（`npm` / `options.baseURL` / `models`）；DB 无 OpenCode 行时会注入合成 `opencode-official`（本地 auth）。会话从 `share/opencode/opencode.db` 读取。
 

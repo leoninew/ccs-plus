@@ -13,7 +13,6 @@ def test_settings_default_homes_use_local_data(settings_root) -> None:
     assert settings.proxy == ""
     assert settings.claude.home == settings_root / "data" / "claude"
     assert settings.claude.permission_mode == "bypassPermissions"
-    assert settings.codex.home == settings_root / "data" / "codex"
     assert settings.codex.session_model_provider == "ccs-plus-managed"
     assert settings.grok.sandbox_mode == "workspace"
     assert settings.grok.always_approve is True
@@ -21,7 +20,8 @@ def test_settings_default_homes_use_local_data(settings_root) -> None:
     assert settings.opencode.home == settings_root / "data" / "opencode"
     assert settings.opencode.permission_mode == "allow"
     assert settings.opencode.always_approve is False
-    assert settings.state_home("codex") == settings.codex.home
+    assert settings.runtime_home("codex") == settings.codex.user_home
+    assert settings.runtime_home("claude") == settings.claude.home
     assert settings.state_home("opencode") == settings.opencode.home
     # user_home is not in settings.yaml; defaults to Path.home() / ".claude"|".codex"
     assert settings.claude.user_home == Path.home() / ".claude"
@@ -40,13 +40,6 @@ def test_settings_default_homes_use_local_data(settings_root) -> None:
         "installed_plugins.json",
         "known_marketplaces.json",
     )
-    assert settings.codex.visibility.profile_extension_keys == (
-        "mcp_servers",
-        "plugins",
-        "marketplaces",
-        "shell_environment_policy",
-    )
-    assert settings.codex.visibility.skills.skip_names == (".system",)
     assert settings.grok.visibility.extension_keys == (
         "mcp_servers",
         "skills",
@@ -67,7 +60,6 @@ def test_settings_loads_codex_provider_defaults(settings_root) -> None:
 
 def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> None:
     monkeypatch.setenv("CCS_PLUS_PROXY", "http://127.0.0.1:7890")
-    monkeypatch.setenv("CCS_PLUS_APPS__CODEX__HOME", "custom/codex")
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__USER_HOME", "custom/user-codex")
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__SESSION_MODEL_PROVIDER", "shared-custom")
     monkeypatch.setenv("CCS_PLUS_APPS__CLAUDE__PERMISSION_MODE", "manual")
@@ -78,7 +70,6 @@ def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> No
     monkeypatch.setenv("CCS_PLUS_APPS__CLAUDE__USER_HOME", "custom/user-claude")
     monkeypatch.setenv("CCS_PLUS_ENCRYPTION_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
     settings = load_settings(settings_root)
-    assert settings.codex.home == settings_root / "custom" / "codex"
     assert settings.proxy == "http://127.0.0.1:7890"
     assert settings.codex.user_home == settings_root / "custom" / "user-codex"
     assert settings.codex.session_model_provider == "shared-custom"
@@ -111,8 +102,8 @@ def test_yaml_user_home_override_when_explicitly_provided(settings_root) -> None
             "    home: data/claude\n    user_home: custom/claude-user\n",
         )
         .replace(
-            "    home: data/codex\n",
-            "    home: data/codex\n    user_home: custom/codex-user\n",
+            "    session_model_provider: ccs-plus-managed\n",
+            "    user_home: custom/codex-user\n    session_model_provider: ccs-plus-managed\n",
         )
         .replace(
             "    home: data/grok\n",

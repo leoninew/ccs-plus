@@ -1,135 +1,63 @@
 # 受管启动的用户与项目扩展可见性验证
-最后修改时间: 2026-08-24 23:15:23
+最后修改时间: 2026-08-25 16:10:06
 
 Review status: Draft
 
 ## Requirement Alignment
 
-- Claude、Codex、Grok 的 user-home extension visibility 保持 provider runtime home
-  隔离；目录按条目 link/copy/skip，不挂载整个 user Home。
-- Codex managed profile 重建保留配置允许的扩展表，并按 existing profile/state/user
-  的优先级合并；user Home 同名项覆盖。
-- Profile、API Key 环境变量键和 ownership marker 继续基于 provider 数据库主键；没有
-  按名称复用，也没有在 launch 中自动迁移或删除旧 profile。
-- 从 OS user Home 启动时，不应用 user-home visibility；但 Codex 仍携带配置声明的
-  profile 保留表，避免 managed profile 重建丢失已有扩展。
-- cache-only Codex plugin 只产生诊断，不会被隐式注册或启用。
-- Codex `plugins/cache` 应整体链接到真实 user Home；state 侧已有实体 cache 不能遮蔽
-  user cache。
-- `best-practices` 与 `housekeeper` 的同步脚本均使用显式 `*_USER_HOME`，并把本地
-  marketplace/plugin 路径转换为 native CLI 可识别的 Windows 路径。
-- provider 的 `export`、`import`、`reset` 均支持可选 app 前置；省略 app 时分别在
-  原有的 custom-provider / non-official-provider 过滤边界内同时处理 Claude、Codex、Grok。
-- export 未给 output path 时，备份文件名以 `all` 或显式 app 标明实际数据范围。
-- 打包后保留 `ccs-plus`，并可用 `ccsp` 作为等价短命令。
+- 指定 provider 时，Claude、Codex、Grok 的 endpoint、模型与 API Key 隔离；profile、API Key 环境变量键和 ownership marker 继续基于 provider 数据库主键。
+- Claude/Grok 保持隔离 runtime Home，并按条目投影真实 user Home 的 MCP、plugin 与 skill。
+- Codex 使用唯一真实 `CODEX_HOME`；profile 不保留或合并用户扩展表、项目 trust、session 或 cache。
+- 从 OS user Home 启动不会改变三端的 cwd。Claude/Grok 仍投影用户扩展；Codex 与普通目录启动完全相同，不产生 visibility、trust 或配置复制的特殊写入。
+- 当前工作目录中的扩展仍由原生 CLI 发现；ccs-plus 不传 `--cd` 或 `--add-dir`，也不复制项目配置。
 
 ## Plan Alignment
 
-`settings.yaml` 已将 Claude MCP 键、Codex profile extension 表和 copy/skip 策略、Grok
-extension 表及索引复制策略分别声明在 `apps.<cli>.visibility`。运行代码不再有
-`CLAUDE_MCP_KEY`、`CODEX_PROFILE_EXTENSION_KEYS` 或 Claude plugin 策略字段。
+`settings.yaml` 在 `apps.claude.visibility` 与 `apps.grok.visibility` 分别声明 MCP、扩展表和 copy/skip 策略。Codex visibility 设置和对应运行代码均已删除。
 
-三个 CLI 共同且不可变的原生目录名称（如 `skills`、`plugins`）保留在共享实现；它们不是
-跨端可变策略。`.env.example` 记录 Claude MCP 键的标量覆盖方式，以及 Dynaconf 对列表型
-visibility 配置执行追加合并的限制。
+三个 CLI 共同且不可变的原生目录名称（如 `skills`、`plugins`）保留在共享实现；它们不是跨端可变策略。`.env.example` 记录 Claude MCP 键的标量覆盖方式，以及 Dynaconf 对列表型 visibility 配置执行追加合并的限制。
 
-provider 数据维护统一以 app-first 方式限定单端，并保留既有路径调用：`export [app]
-[output-path]`、`import [app] <input-path>`、`reset [app]`。限定导入先完整解密、解析并
-验证备份，之后才过滤目标 app，因而不会忽略备份内非目标 app 的损坏记录。省略 output
-path 的 export 分别生成 `providers-all-<timestamp>.json` 与
-`providers-<app>-<timestamp>.json`。
+### 2026-08-25 待实现范围
 
-`pyproject.toml` 将 `ccsp` 映射到主命令的同一 Click 入口，不增加第二套命令实现；README
-在安装说明中明确两个命令均可使用。
+实现已基于现场 `notify` 警告改为：Codex 不再使用隔离 runtime Home 加 visibility 投影，而是以真实 `~/.codex` 作为唯一 `CODEX_HOME`。受管 profile 与原生用户配置处于同一 Home，但 profile 只包含 provider 核心字段，不复制 extension tables 或 `[projects]`。本轮 Verification 需核对这一实现是否同时保留 provider 路由隔离、用户扩展可见性与原生 cwd。
 
 ## Actual Diff
 
 | 范围 | 实际变更 |
 | --- | --- |
-| settings 与 runtime | 新增三套独立 visibility 设置模型，factory 将其注入 Claude、Codex、Grok visibility；Codex profile 保留表由实例配置读取。 |
-| 可见性行为 | Claude MCP key、Codex skills/plugin 隔离规则、Grok extension/hook/registry 规则全部配置驱动。 |
-| 配置写入与身份 | profile identity 继续由 provider 主键派生；受管配置使用锁和原子替换，不生成 `.ccs-plus.bak`。 |
-| 同步脚本 | `best-practices/sync.sh`、`housekeeper/sync.sh` 不继承受管 Home；Grok 的 list/update/install 均通过 user-home 包装。 |
-| 文档与测试 | 合并历史 SpecFlow 文档、补充 `.env.example`，并覆盖配置解析、三端 visibility、profile 重建、user-Home 禁用与 sync 调用边界。README 保持用户使用、开发、测试和贡献说明。 |
-| Provider 数据命令 | export/import/reset 接受可选 `claude`、`codex`、`grok` 前置；默认统一操作三端，单端 import 在全量备份校验后过滤，自动 export 文件名包含 app scope。 |
-| Provider CLI 命名 | 统一使用单数 `provider` 命令组；`providers` 不再作为子命令可用，备份字段和文件名维持复数。 |
-| 顶层命令短用法 | `l`、`p`、`r` 分别复用 `launch`、`provider`、`run` 的同一 Click 命令对象。 |
-| CLI 别名 | 保留 `ccs-plus` 主命令，并注册指向相同入口的 `ccsp`。 |
-| Claude settings 键投影（2026-08-24 补） | `ClaudeHomeVisibility` 新增 `_merge_settings_keys`：把 `apps.claude.visibility.settings_keys`（`settings.yaml` 必填声明为 `enabledPlugins`、`extraKnownMarketplaces`）从 user `settings.json` 并集合并进 state `settings.json`，同名条目 user 覆盖；配置解析、factory 注入与合并行为均有测试。 |
+| Codex runtime | launch、session 查询与受管 profile 清理均使用真实 `apps.codex.user_home`；不保留第二个 Codex runtime-root 配置。 |
+| Codex profile | profile 仅重建 provider 核心字段，不再保留或合并 MCP、plugins、marketplaces、shell policy 或 `[projects]`。 |
+| 用户扩展 | Claude/Grok 保留隔离 Home 的条目投影与用户配置合并；Codex 不进入 `HomeVisibility`。 |
+| user Home 工作目录 | Claude/Grok 在 `cwd == Path.home()` 时仍投影 MCP、plugin、skill；Codex 直接使用真实 Home。三端都保留传入 cwd。 |
+| 文档与测试 | RSPV 以单一真实 Codex Home 为准，不再把 cache 投影、同步脚本或 CLI 别名作为本场景验收。 |
 
-当前实际变更与 Requirement/Plan 的大部分内容一致，但 Codex `plugins/cache` 仍受通用
-“目标端已有实体目录保持不动”规则影响，尚未满足 user-authoritative 覆盖要求。旧
-SpecFlow 文档的删除由本 Requirement、Plan 和 Verification 统一承接，未发现指向被删除
-文档的 Markdown 链接。
+当前实际变更与已收口的 Requirement/Plan 对齐。Verification 保持 Draft，待用户审阅验收结论。
 
 ## Acceptance Checklist
 
+- [x] Claude/Grok 从 user Home 启动时仍投影用户 MCP、plugin 与 skill，provider 隔离和 `cwd` 保持不变。
+- [x] Codex 从任意 `cwd=A` 启动时，`CODEX_HOME` 是唯一真实 user Home，`cwd=A` 不变，argv 不含 `--cd`/`--add-dir`，并使用指定的 managed provider profile。
+- [x] Codex managed profile 不保留 `mcp_servers`、plugins、marketplaces、shell policy 或 `[projects]`；旧 profile 中 OS user-Home trust 会在下一次 ensure 后消失。
+- [x] `cwd == Path.home()` 的 Codex launch 没有 visibility/trust/config 特殊写入，且真实 user `config.toml` 不再触发 project-local `notify` 警告。
 - [x] 项目目录启动保留 CLI 原生 `cwd` 与项目级发现边界。
-- [x] 三端 user-home skills/plugins/MCP/扩展配置的隔离可见性有回归覆盖。
-- [x] Codex repeated ensure 保留已有扩展并以 user 配置覆盖同名项。
-- [x] cache-only plugin 有诊断且不自动启用。
-- [ ] Codex user cache 覆盖 state 侧已有实体 `plugins/cache`，并恢复为正确链接。
-- [x] user-Home 启动不执行 user-home link/merge，provider 隔离保持。
-- [x] provider 主键 profile identity 和无 `.ccs-plus.bak` 有回归覆盖。
-- [x] 同步脚本不再直接调用会继承受管 `GROK_HOME` 的 `grok plugin` 子命令。
-- [x] provider export/import/reset 缺省时覆盖三端，显式 Codex 时只操作 Codex。
-- [x] 限定 import 不会绕过完整备份校验，reset 的 Codex profile 清理仍只处理删除目标。
-- [x] export 默认文件名在全端时包含 `all`，单端时包含显式 app。
-- [x] `provider` 是唯一的 provider 管理命令组，`providers` 会报未知命令。
-- [x] `l`、`p`、`r` 分别与 `launch`、`provider`、`run` 使用同一命令对象。
-- [x] `ccsp --help` 与 `ccs-plus --help` 均可用，命令面一致。
-- [x] Claude state `settings.json` 每次启动合并 user Home 的 `enabledPlugins` 与
-  `extraKnownMarketplaces`，同名条目 user 覆盖，state 独有键保留；键缺失、目标缺失、
-  源损坏与未变化场景均有回归覆盖（2026-08-24 specflow 缓存误孤立事故的修复）。
+- [x] Codex profile identity 和无 `.ccs-plus.bak` 有回归覆盖。
 
 ## Test Results
 
 | 检查 | 结果 |
 | --- | --- |
-| `uv run ruff format --check .` | 通过，87 files already formatted |
-| `uv run ruff check src tests` | 通过 |
-| `uv run mypy src` | 通过，14 source files 无问题 |
-| `uv run pytest tests` | 通过，172 passed、1 skipped |
-| `uv run ccsp provider {export,import,reset} --help` | 通过，三条命令均展示 app 可选语义 |
-| `uv run ccsp {l,p,r} --help` | 通过，三个短用法分别展示原命令的参数和子命令 |
-| `uv run ccs-plus --help`、`uv run ccsp --help` | 通过，均暴露 launch/provider/run 命令 |
-| `bash -n`（两个 `sync.sh`） | 通过 |
-| 旧 SpecFlow 链接检查 | 通过，未发现指向已删除文档的 Markdown 链接 |
-
-2026-08-24 Claude settings 键投影补充后复跑：
-
-| 检查 | 结果 |
-| --- | --- |
-| `uv run ruff format --check`（本次改动的源码与测试文件） | 通过 |
-| `uv run ruff check src tests` | 通过 |
-| `uv run mypy src` | 通过，14 source files 无问题 |
-| `uv run pytest tests` | 通过，208 passed、1 skipped |
+| 单元与集成回归 | `python -m pytest`：193 passed, 1 skipped。 |
+| 静态检查 | `ruff check .`：通过；`mypy src`：无问题。 |
+| user Home 原生探针 | Claude `c2`、Codex `x2`、Grok `g3` 的 MCP 与 plugin list 均成功；三端 launch spec 均保留传入 cwd。 |
+| 最小真实推理 | Claude `c2`、Codex `x2`、Grok `g3` 均从 `C:\Users\wangm25` 返回 `READY`。Grok `g3` 启动约 43 秒、实际推理约 7.5 秒，300 秒上限未触发。 |
+| 项目目录原生探针 | 从 `D:\SourceCodes\mywork\ccs-plus` 重新执行 Claude MCP、Codex `debug prompt-input` 与 Grok MCP 均成功，cwd 未被 ccs-plus 改写。 |
 
 ## Risks And Gaps
 
-- 未执行 `sync.sh skills` 的真实 CLI 集成测试，因为它会修改 `~/.claude`、`~/.codex`、
-  `~/.grok` 的 plugin/marketplace 状态。已使用 Bash 语法检查和静态调用路径检查覆盖
-  user-home 包装与 native path 传递；首次实际执行仍应在可恢复的用户环境中观察 CLI 输出。
-- 真实 user-home 中只有 cache、没有 plugin registration 的情况仍保持不自动恢复；这是
-  已接受的安全边界。
-- 当前 state 侧若已存在实体 `plugins/cache`，启动不会替换它，因此 user cache 可能继续
-  不可见；需完成 Plan 中的 Codex cache 覆盖实现后重新验证。
-- （2026-08-24 已修复）Claude 隔离 `settings.json` 此前不合并 user Home 的
-  `enabledPlugins`/`extraKnownMarketplaces`：隔离会话的共享 cache 清扫把 user Home 刚
-  安装的 specflow 缓存标记 `.orphaned_at`，两个 Home 均无法加载该插件。`_merge_settings_keys`
-  上线后两 Home 的启用清单保持一致，误孤立条件消除；已被标记的缓存需人工移除
-  `.orphaned_at` 或删除对应 cache 目录后重启会话恢复。
-- （2026-08-24 Grok 专项检查）Grok 的等价机制完整，无 Claude 类缺失：`extension_keys`
-  已含 `plugins`/`marketplace`，`_merge_user_config` 每次 launch 合并且
-  `GrokManagedConfig.ensure()` 保留式改写只动 `[models]`/`[model.*]`，合并结果不被冲掉；
-  registry 为 launch 时覆盖复制、payload 目录逐条 junction。实测 state 与 user 的
-  `[plugins].enabled` 分叉（state 多 housekeeper 等旧项、缺 specflow）源于上次 grok
-  launch 早于插件变更，下次 `ccsp launch grok` 以 user 同名覆盖自愈，属 launch 时同步的
-  固有时滞。残留观察项：registry.json 内嵌指向 user Home 的绝对 `path`，隔离会话解析
-  payload 会绕过 junction 直读 user Home；Grok CLI 是否存在类似 Claude 的 cache 孤儿
-  清扫未验证，若有则 state registry 快照时滞可能触发同类误清理。
+- Codex 与原生 Codex 共同写入真实 Home 的风险仍存在；受管 profile 必须继续按 ownership marker、文件锁和原子替换受限写入。
+- Claude/Grok 的项目级发现协议由 CLI 版本决定；验收只能证明 ccs-plus 保持 cwd，不能代替各原生 CLI 的兼容性测试。
+- Grok `g2` 的 provider 在真实请求中被服务端以 401 拒绝（API Key 无效）；`g3` 已成功，因此这是该 provider credential 的运行问题，不是 Grok adapter、Home 投影或超时问题。
 
 ## Conclusion
 
-除 Codex user-authoritative cache 覆盖外，当前实现满足既有 Requirement 和 Plan，工程检查
-通过。Verification 保持 Draft，待完成该行为修正及回归测试后再重新验收。
+单一真实 Codex Home 方案在 user Home 与项目目录的三端原生探针、三条最小真实推理和全量工程检查中均符合本需求。`g2` 的失效 credential 不影响实现结论，但该 provider 本身不能投入使用。Verification 保持 Draft，等待用户审阅。

@@ -4,7 +4,6 @@ import logging
 import os
 import tempfile
 from collections.abc import Mapping, MutableMapping
-from copy import deepcopy
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -14,7 +13,6 @@ import tomlkit
 from tomlkit import TOMLDocument
 
 from ccs_plus.domain import CodexRuntime, GrokRuntime, ProviderError, RuntimeProvider
-from ccs_plus.home_visibility import HomeVisibility
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +26,7 @@ class ManagedProfile:
 @dataclass(frozen=True)
 class ManagedConfig:
     runtime: RuntimeProvider
-    state_home: Path
+    runtime_home: Path
     model: str | None
     effort: str | None
 
@@ -42,12 +40,11 @@ class CodexManagedConfig(ManagedConfig):
     session_model_provider: str
     approval_policy: str | None = None
     sandbox_mode: str | None = None
-    visibility: HomeVisibility | None = None
 
     def ensure(self) -> ManagedProfile:
         profile = _managed_name(self.runtime, "codex")
         env_key = _managed_env_key(self.runtime, "CODEX")
-        path = self.state_home / f"{profile}.config.toml"
+        path = self.runtime_home / f"{profile}.config.toml"
         marker = _marker(self.runtime)
         approval_policy = _required(
             self.approval_policy or self.runtime.approval_policy,
@@ -61,7 +58,8 @@ class CodexManagedConfig(ManagedConfig):
             content = path.read_text(encoding="utf-8") if path.exists() else ""
             if content and marker not in content:
                 raise ProviderError(f"Refusing to overwrite unmanaged Codex profile: {path}")
-            existing = self._parse(content, path) if content else None
+            if content:
+                self._parse(content, path)
             document = tomlkit.document()
             document.add(tomlkit.comment(marker))
             document["model_provider"] = self.session_model_provider
@@ -71,15 +69,6 @@ class CodexManagedConfig(ManagedConfig):
                 document["model_reasoning_effort"] = self.effort
             document["approval_policy"] = approval_policy
             document["default_permissions"] = self._permission_profile(sandbox_mode)
-            if existing is not None:
-                projects = existing.get("projects")
-                if isinstance(projects, Mapping):
-                    document["projects"] = deepcopy(projects)
-                if self.visibility is not None:
-                    for key in self.visibility.profile_extension_keys:
-                        value = existing.get(key)
-                        if isinstance(value, Mapping):
-                            document[key] = deepcopy(value)
             providers = tomlkit.table()
             provider = tomlkit.table()
             provider["name"] = self.runtime.provider.name
@@ -91,8 +80,6 @@ class CodexManagedConfig(ManagedConfig):
             provider["env_key"] = env_key
             providers[self.session_model_provider] = provider
             document["model_providers"] = providers
-            if self.visibility is not None:
-                self.visibility.merge_into(document)
             _write_atomic(path, tomlkit.dumps(document), locked=True)
         return ManagedProfile(name=profile, env_key=env_key)
 
@@ -115,9 +102,9 @@ class CodexManagedConfig(ManagedConfig):
             raise ProviderError(f"Managed Codex profile is invalid TOML: {path}: {exc}") from exc
 
     @staticmethod
-    def remove(state_home: Path, provider_id: str) -> bool:
+    def remove(runtime_home: Path, provider_id: str) -> bool:
         profile = _managed_name_for_provider_id(provider_id, "codex")
-        path = state_home / f"{profile}.config.toml"
+        path = runtime_home / f"{profile}.config.toml"
         marker = f"ccs-plus-managed: codex:{provider_id}"
         with _locked(path):
             if not path.is_file():
@@ -145,7 +132,7 @@ class GrokManagedConfig(ManagedConfig):
     def ensure(self) -> ManagedProfile:
         profile = _managed_name(self.runtime, "grok")
         env_key = _managed_env_key(self.runtime, "GROK")
-        path = self.state_home / "config.toml"
+        path = self.runtime_home / "config.toml"
         marker = _marker(self.runtime)
         with _locked(path):
             content = path.read_text(encoding="utf-8") if path.exists() else ""
@@ -232,19 +219,18 @@ class GrokManagedConfig(ManagedConfig):
 
 def ensure_managed_config(
     runtime: CodexRuntime | GrokRuntime,
-    state_home: Path,
+    runtime_home: Path,
     model: str | None,
     effort: str | None,
     *,
     session_model_provider: str | None = None,
     approval_policy: str | None = None,
     sandbox_mode: str | None = None,
-    visibility: HomeVisibility | None = None,
 ) -> ManagedProfile:
     if isinstance(runtime, CodexRuntime):
         return CodexManagedConfig(
             runtime=runtime,
-            state_home=state_home,
+            runtime_home=runtime_home,
             model=model,
             effort=effort,
             session_model_provider=_required(
@@ -253,10 +239,9 @@ def ensure_managed_config(
             ),
             approval_policy=approval_policy,
             sandbox_mode=sandbox_mode,
-            visibility=visibility,
         ).ensure()
     if isinstance(runtime, GrokRuntime):
-        return GrokManagedConfig(runtime, state_home, model, effort).ensure()
+        return GrokManagedConfig(runtime, runtime_home, model, effort).ensure()
     raise ProviderError(f"Unsupported managed config runtime: {type(runtime).__name__}.")
 
 
@@ -264,9 +249,9 @@ def _managed_name(runtime: RuntimeProvider, suffix: str) -> str:
     return _managed_name_for_provider_id(runtime.provider.id, suffix)
 
 
-def remove_managed_config(state_home: Path, provider_id: str) -> bool:
+def remove_managed_config(runtime_home: Path, provider_id: str) -> bool:
     """Remove the ccs-plus-owned managed config associated with a provider."""
-    return CodexManagedConfig.remove(state_home, provider_id)
+    return CodexManagedConfig.remove(runtime_home, provider_id)
 
 
 def _managed_name_for_provider_id(provider_id: str, suffix: str) -> str:

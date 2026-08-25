@@ -8,7 +8,7 @@ import os
 import shutil
 import stat
 import tempfile
-from collections.abc import Collection, Mapping, MutableMapping
+from collections.abc import Collection, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,11 +20,9 @@ from tomlkit import TOMLDocument
 
 from ccs_plus.domain import (
     ClaudeRuntime,
-    CodexRuntime,
     GrokRuntime,
     OpenCodeRuntime,
     ProviderError,
-    RuntimeConfig,
 )
 from ccs_plus.settings import AppSettings, EntryVisibilitySettings
 
@@ -37,7 +35,6 @@ class HomeVisibility:
 
     state_home: Path
     user_home: Path | None
-    profile_extension_keys: tuple[str, ...] = ()
 
     def apply(self) -> None:
         raise NotImplementedError
@@ -48,7 +45,7 @@ class HomeVisibility:
 
 @dataclass(frozen=True)
 class DisabledHomeVisibility(HomeVisibility):
-    """Disable user-home propagation for launches rooted at the user Home."""
+    """Disable OpenCode user-home propagation for launches rooted at the user Home."""
 
     def apply(self) -> None:
         pass
@@ -148,77 +145,6 @@ class ClaudeHomeVisibility(HomeVisibility):
 
 
 @dataclass(frozen=True)
-class CodexHomeVisibility(HomeVisibility):
-    is_official: bool = False
-    project_directory: Path | None = None
-    skills: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
-    plugins: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
-
-    def apply(self) -> None:
-        if self.user_home is None:
-            return
-        self.expose_sessions()
-        link_user_entries(
-            self.user_home / "skills",
-            self.state_home / "skills",
-            skip_names=self.skills.skip_names,
-            copy_names=self.skills.copy_names,
-        )
-        link_user_entries(
-            self.user_home / "plugins",
-            self.state_home / "plugins",
-            skip_names=self.plugins.skip_names,
-            copy_names=self.plugins.copy_names,
-        )
-        if self.is_official:
-            self._merge_into_state()
-
-    def expose_sessions(self) -> None:
-        """Expose real Codex sessions for launch and TUI discovery."""
-        if self.user_home is None or _path_key(self.state_home) == _path_key(self.user_home):
-            return
-        source = self.user_home / "sessions"
-        target = self.state_home / "sessions"
-        source_was_present = source.is_dir()
-        try:
-            source.mkdir(parents=True, exist_ok=True)
-            target.parent.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            raise OSError(f"Failed to prepare Codex session paths: {exc}") from exc
-        if not source_was_present and _path_lexists(target):
-            return
-        _link_one(source, target)
-
-    def merge_into(self, document: TOMLDocument) -> None:
-        state_document = _read_toml(self.state_home / "config.toml", "Codex state")
-        user_document = (
-            _read_toml(self.user_home / "config.toml", "Codex user")
-            if self.user_home is not None
-            else None
-        )
-        for key in self.profile_extension_keys:
-            _merge_named_table(document, key, document, state_document, user_document)
-        if user_document is not None:
-            _merge_current_project_trust(document, user_document, self.project_directory)
-
-    def _merge_into_state(self) -> None:
-        if self.user_home is None:
-            return
-        user_document = _read_toml(self.user_home / "config.toml", "Codex user")
-        if user_document is None:
-            return
-        path = self.state_home / "config.toml"
-        with _toml_lock(path):
-            document = _read_toml(path, "Codex state") if path.exists() else tomlkit.document()
-            if document is None:
-                return
-            for key in self.profile_extension_keys:
-                _merge_named_table(document, key, document, user_document)
-            _merge_current_project_trust(document, user_document, self.project_directory)
-            _write_toml_atomic(path, document)
-
-
-@dataclass(frozen=True)
 class GrokHomeVisibility(HomeVisibility):
     extension_keys: tuple[str, ...] = ()
     skills: EntryVisibilitySettings = field(default_factory=EntryVisibilitySettings)
@@ -272,24 +198,17 @@ class GrokHomeVisibility(HomeVisibility):
 
 
 def home_visibility_for(
-    runtime: RuntimeConfig,
+    runtime: ClaudeRuntime | GrokRuntime | OpenCodeRuntime,
     settings: AppSettings,
     state_home: Path,
-    project_directory: Path | None = None,
     *,
     enabled: bool = True,
 ) -> HomeVisibility:
     """Build the visibility policy matching *runtime*."""
     if not enabled:
-        profile_extension_keys = (
-            settings.codex.visibility.profile_extension_keys
-            if isinstance(runtime, CodexRuntime)
-            else ()
-        )
         return DisabledHomeVisibility(
             state_home=state_home,
             user_home=None,
-            profile_extension_keys=profile_extension_keys,
         )
     if isinstance(runtime, ClaudeRuntime):
         return ClaudeHomeVisibility(
@@ -299,16 +218,6 @@ def home_visibility_for(
             settings_keys=settings.claude.visibility.settings_keys,
             skills=settings.claude.visibility.skills,
             plugins=settings.claude.visibility.plugins,
-        )
-    if isinstance(runtime, CodexRuntime):
-        return CodexHomeVisibility(
-            state_home=state_home,
-            user_home=settings.codex.user_home,
-            profile_extension_keys=settings.codex.visibility.profile_extension_keys,
-            is_official=runtime.provider.is_official,
-            project_directory=project_directory,
-            skills=settings.codex.visibility.skills,
-            plugins=settings.codex.visibility.plugins,
         )
     if isinstance(runtime, GrokRuntime):
         return GrokHomeVisibility(
@@ -472,43 +381,6 @@ def _merge_named_table(
             found = True
     if found:
         document[key] = merged
-
-
-def _merge_current_project_trust(
-    document: TOMLDocument,
-    user_document: TOMLDocument,
-    project_directory: Path | None,
-) -> None:
-    if project_directory is None:
-        return
-    user_projects = user_document.get("projects")
-    if not isinstance(user_projects, Mapping):
-        return
-    matching_key = _project_config_key(user_projects, project_directory)
-    if matching_key is None:
-        return
-    projects = document.get("projects")
-    if not isinstance(projects, Mapping):
-        projects = tomlkit.table()
-        document["projects"] = projects
-    cast(MutableMapping[str, object], projects)[matching_key] = deepcopy(
-        user_projects[matching_key]
-    )
-
-
-def _project_config_key(projects: Mapping[object, object], directory: Path) -> str | None:
-    current = os.path.normcase(os.path.abspath(os.path.normpath(str(directory))))
-    matches: list[str] = []
-    for key in projects:
-        if not isinstance(key, str):
-            continue
-        candidate = os.path.normcase(os.path.abspath(os.path.normpath(key)))
-        try:
-            if os.path.commonpath((candidate, current)) == candidate:
-                matches.append(key)
-        except ValueError:
-            continue
-    return max(matches, key=len, default=None)
 
 
 def _cleanup_dangling_links(target_dir: Path) -> None:
