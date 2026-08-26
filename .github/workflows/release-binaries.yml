@@ -68,10 +68,7 @@ jobs:
           enable-cache: true
 
       - name: Sync project
-        run: uv sync --all-groups
-
-      - name: Install PyInstaller
-        run: uv pip install "pyinstaller>=6.11,<7"
+        run: uv sync --all-groups --locked
 
       - name: Build binary
         shell: bash
@@ -79,12 +76,18 @@ jobs:
           set -euo pipefail
           ENTRY="src/ccs_plus/__main__.py"
           NAME="ccs-plus"
-          uv run pyinstaller \
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            data_separator=";"
+          else
+            data_separator=":"
+          fi
+          uv run --locked --no-sync pyinstaller \
             --noconfirm \
             --clean \
             --onefile \
             --name "${NAME}" \
             --paths src \
+            --add-data "settings.yaml${data_separator}." \
             --hidden-import ccs_plus \
             --hidden-import ccs_plus.cli \
             --hidden-import ccs_plus.tui \

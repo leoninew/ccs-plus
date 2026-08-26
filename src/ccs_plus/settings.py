@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,6 +14,19 @@ from ccs_plus.domain import CodexAppConfig, ProviderError
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 ENCRYPTION_KEY_EXAMPLE = "replace-with-a-fernet-key"
 SETTINGS_FILE = "settings.yaml"
+
+
+def _runtime_root() -> Path:
+    """Return the persistent directory for configuration and application state."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return PROJECT_ROOT
+
+
+def _bundled_settings_path() -> Path:
+    """Return the settings file embedded by PyInstaller, when present."""
+    bundle_root = Path(getattr(sys, "_MEIPASS", PROJECT_ROOT))
+    return bundle_root / SETTINGS_FILE
 
 
 @dataclass(frozen=True)
@@ -215,9 +229,11 @@ def _get_or_default(config: Dynaconf, key: str, default: object) -> object:
 
 
 def load_settings(project_root: Path | None = None) -> AppSettings:
-    root = (project_root or PROJECT_ROOT).resolve()
+    root = (project_root or _runtime_root()).resolve()
     load_dotenv(root / ".env", override=False)
     settings_path = root / SETTINGS_FILE
+    if not settings_path.is_file() and project_root is None and getattr(sys, "frozen", False):
+        settings_path = _bundled_settings_path()
     if not settings_path.is_file():
         raise ProviderError(f"Configuration file is missing: {settings_path}")
     config = Dynaconf(

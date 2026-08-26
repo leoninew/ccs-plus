@@ -366,9 +366,7 @@ class ProviderRepository:
         result = list(providers)
         present_ids = {provider.id for provider in result}
         if AppKind.OPENCODE in selected and "opencode-official" not in present_ids:
-            synthetic = ProviderRepository._synthetic_by_name(
-                AppKind.OPENCODE, "OpenCode Official"
-            )
+            synthetic = ProviderRepository._synthetic_by_name(AppKind.OPENCODE, "OpenCode Official")
             assert synthetic is not None
             result.append(synthetic)
         return result

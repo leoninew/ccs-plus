@@ -92,7 +92,7 @@ Invoke-WebRequest -Uri "https://github.com/leoninew/ccs-plus/releases/latest/dow
   -OutFile "$env:LOCALAPPDATA\ccs-plus\ccs-plus.exe"
 ```
 
-仍需本机已安装要启动的 CLI（`claude` / `codex` / `grok` / `opencode`），并配置好 `settings.yaml` 与 cc-switch 数据库。
+仍需本机已安装要启动的 CLI（`claude` / `codex` / `grok` / `opencode`），并配置好 cc-switch 数据库。二进制内嵌默认 `settings.yaml`；如需覆盖默认路径或运行配置，可在 exe 同目录放置并编辑 `settings.yaml`，并将 `.env` 放在同一目录。
 
 ### 方式 B：从源码安装（开发）
 

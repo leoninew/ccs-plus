@@ -58,6 +58,41 @@ def test_settings_loads_codex_provider_defaults(settings_root) -> None:
     assert defaults.sandbox_mode == "danger-full-access"
 
 
+def test_frozen_binary_uses_embedded_settings_and_persistent_runtime_root(
+    settings_root, monkeypatch, tmp_path: Path
+) -> None:
+    runtime_root = tmp_path / "install"
+    runtime_root.mkdir()
+    monkeypatch.setattr("ccs_plus.settings.sys.frozen", True, raising=False)
+    monkeypatch.setattr("ccs_plus.settings.sys.executable", runtime_root / "ccs-plus.exe")
+    monkeypatch.setattr("ccs_plus.settings.sys._MEIPASS", settings_root, raising=False)
+
+    settings = load_settings()
+
+    assert settings.project_root == runtime_root
+    assert settings.claude.home == runtime_root / "data" / "claude"
+
+
+def test_frozen_binary_prefers_settings_next_to_executable(
+    settings_root, monkeypatch, tmp_path: Path
+) -> None:
+    runtime_root = tmp_path / "install"
+    runtime_root.mkdir()
+    (runtime_root / "settings.yaml").write_text(
+        (settings_root / "settings.yaml")
+        .read_text(encoding="utf-8")
+        .replace('proxy: ""', "proxy: http://local-proxy:7890"),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("ccs_plus.settings.sys.frozen", True, raising=False)
+    monkeypatch.setattr("ccs_plus.settings.sys.executable", runtime_root / "ccs-plus.exe")
+    monkeypatch.setattr("ccs_plus.settings.sys._MEIPASS", settings_root, raising=False)
+
+    settings = load_settings()
+
+    assert settings.proxy == "http://local-proxy:7890"
+
+
 def test_environment_overrides_nested_settings(settings_root, monkeypatch) -> None:
     monkeypatch.setenv("CCS_PLUS_PROXY", "http://127.0.0.1:7890")
     monkeypatch.setenv("CCS_PLUS_APPS__CODEX__USER_HOME", "custom/user-codex")
