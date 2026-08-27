@@ -54,7 +54,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history so scripts/version-calc.py (if used later) can walk commits.
           fetch-depth: 0
 
       - name: Set up Python
