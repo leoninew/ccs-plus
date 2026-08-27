@@ -7,15 +7,18 @@ Rules (x is fixed at 0):
   * any other commit                          -> z += 1
   * log one line every time y or z changes:
         <commit-date>  <sha8>  <subject-first-50-chars>  <x>.<y>.<z>
-  * after the table, write the final version into project ``pyproject.toml``
+  * ``--apply`` writes the final version into ``pyproject.toml`` and refreshes
+    ``uv.lock``
 
 Run from any directory inside the target git repository:
 
     python scripts/version-calc.py
+    python scripts/version-calc.py --apply
 """
 
 from __future__ import annotations
 
+import argparse
 import logging
 import re
 import subprocess
@@ -59,15 +62,15 @@ def repo_root() -> Path:
     return Path(run_git("rev-parse", "--show-toplevel").strip())
 
 
-def update_pyproject_version(version: str) -> Path:
-    """Set ``[project].version`` in the repo-root pyproject.toml."""
+def update_pyproject_version(version: str) -> tuple[Path, bool]:
+    """Set ``[project].version`` and return its path and whether it changed."""
     path = repo_root() / "pyproject.toml"
     if not path.is_file():
         raise FileNotFoundError(f"pyproject.toml not found at {path}")
 
-    text = path.read_text(encoding="utf-8")
+    text = path.read_bytes().decode("utf-8")
     updated, count = re.subn(
-        r'(?m)^version\s*=\s*"[^"]*"',
+        r'(?m)^version\s*=\s*"[^"]*"\r?$',
         f'version = "{version}"',
         text,
         count=1,
@@ -76,14 +79,30 @@ def update_pyproject_version(version: str) -> Path:
         raise RuntimeError(
             f'expected exactly one top-level version = "..." in {path}, found {count}'
         )
-    if updated == text:
-        return path
-    path.write_text(updated, encoding="utf-8")
-    return path
+    if updated == text and "\r\n" not in text:
+        return path, False
+    path.write_text(updated, encoding="utf-8", newline="\n")
+    return path, True
 
 
-def main() -> int:
+def refresh_uv_lockfile(root: Path) -> None:
+    """Update the lockfile after project metadata changes."""
+    subprocess.run(["uv", "lock"], cwd=root, check=True)
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Calculate the project version from Git history.")
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="write the calculated version and refresh uv.lock",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    args = parse_args(argv)
 
     x = 0
     y = 0
@@ -103,21 +122,21 @@ def main() -> int:
 
     version = f"{x}.{y}.{z}"
     if not saw_commit:
-        LOGGER.warning("no commits; keeping version %s", version)
+        LOGGER.warning("no commits; calculated version %s", version)
 
-    path = update_pyproject_version(version)
-    try:
-        display_path = path.relative_to(repo_root()).as_posix()
-    except ValueError:
-        display_path = path.name
-    # Match history row layout: <date>  <sha8>  <subject-50>  <version>
-    LOGGER.info(
-        "%s  %s  %s  %s",
-        "-------------------------",
-        "--------",
-        f"set {display_path}"[:50],
-        version,
-    )
+    if not args.apply:
+        LOGGER.info("calculated version %s; rerun with --apply to update project files", version)
+        return 0
+
+    root = repo_root()
+    path, changed = update_pyproject_version(version)
+    display_path = path.relative_to(root).as_posix()
+    if changed:
+        LOGGER.info("set %s to %s", display_path, version)
+    else:
+        LOGGER.info("%s already matches %s", display_path, version)
+    refresh_uv_lockfile(root)
+    LOGGER.info("refreshed uv.lock")
     return 0
 
 
