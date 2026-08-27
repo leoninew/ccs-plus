@@ -1,6 +1,10 @@
 name: Release wheel
 
 on:
+  push:
+    branches: [develop]
+    tags:
+      - "v*"
   release:
     types: [published]
   workflow_dispatch:
@@ -14,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: wheel-release-${{ github.event.release.tag_name || inputs.tag }}
+  group: wheel-release-${{ github.event_name == 'push' && github.ref_name || github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -22,16 +26,19 @@ jobs:
     name: Build and verify wheel
     runs-on: ubuntu-latest
     env:
-      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || github.event.release.tag_name || inputs.tag }}
+      BUILD_REF: ${{ github.event_name == 'push' && github.ref || github.event.release.tag_name || inputs.tag }}
+      BUILD_ID: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || github.event_name == 'push' && format('develop-{0}', github.sha) || github.event.release.tag_name || inputs.tag }}
 
     steps:
-      - name: Check out release tag
+      - name: Check out build ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag }}
+          ref: ${{ env.BUILD_REF }}
           fetch-depth: 0
 
       - name: Verify checked out tag
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_type == 'tag')
         shell: bash
         run: |
           set -euo pipefail
@@ -102,16 +109,19 @@ jobs:
                   f"wheel name metadata {metadata['Name']!r} does not match "
                   f"project name {project_name!r}"
               )
-          if (tag_version, project_version, metadata["Version"]) != (
-              project_version,
-              project_version,
-              project_version,
-          ):
-              raise SystemExit(
-                  f"release versions differ: tag={tag_version!r}, "
-                  f"project={project_version!r}, wheel={metadata['Version']!r}"
-              )
-          print(f"validated {wheels[0].name} for version {project_version}")
+          if tag_version:
+              if (tag_version, project_version, metadata["Version"]) != (
+                  project_version,
+                  project_version,
+                  project_version,
+              ):
+                  raise SystemExit(
+                      f"release versions differ: tag={tag_version!r}, "
+                      f"project={project_version!r}, wheel={metadata['Version']!r}"
+                  )
+              print(f"validated {wheels[0].name} for release {os.environ['RELEASE_TAG']}")
+          else:
+              print(f"validated {wheels[0].name} for develop ({project_version})")
           PY
 
       - name: Install and smoke test wheel
@@ -129,7 +139,7 @@ jobs:
       - name: Upload verified wheel
         uses: actions/upload-artifact@v4
         with:
-          name: ccs-plus-wheel-${{ env.RELEASE_TAG }}
+          name: ccs-plus-wheel-${{ env.BUILD_ID }}
           path: dist/*.whl
           if-no-files-found: error
           retention-days: 14
@@ -137,6 +147,7 @@ jobs:
   upload:
     name: Upload wheel to GitHub Release
     needs: build
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
