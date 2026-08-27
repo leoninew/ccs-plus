@@ -115,17 +115,17 @@ ccsp provider list
 
 | 操作 | 按键 |
 | --- | --- |
-| 切换面板 | `tab` / `s-tab` · `←`/`→`（左栏 ↔ sessions） |
+| 切换面板 | `tab` / `s-tab`：`app → sessions → provider → permissions → buttons` |
 | 列表移动 | `↑↓`、`j/k`、鼠标滚轮 |
 | 点选 | 鼠标点击 |
 | 过滤 provider / sessions | `/` 后输入 |
 | 会话范围 this dir ↔ all | sessions 面板焦点下按 `a` |
 | Launch ↔ Cancel | 按钮焦点下 `←`/`→` |
-| 启动 / 取消 | `enter`（Launch）· `esc` |
+| 启动 / 取消 | `Ctrl+Enter`（直接 Launch）· `enter`（逐步导航 / 按钮 Launch）· `esc` |
 | 数字跳转 | `1`–`9` |
 
-- **New session**：显示可编辑 directory，默认当前目录。
-- **Resume**：隐藏 directory，使用会话自身的 cwd。
+- **cwd**：在顶栏显示 TUI 启动时的当前目录；恢复会话时显示会话自身的 cwd。启动目录遵循命令行进程的工作目录，不在 TUI 内编辑。
+- **Resume**：使用会话自身的 cwd。
 
 ## 配置
 

@@ -16,13 +16,13 @@ from prompt_toolkit.output import DummyOutput
 from ccs_plus.adapters import build_provider
 from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider
 from ccs_plus.launch_history import LaunchHistory
-from ccs_plus.tui import PERMISSION_PRESETS, LaunchPlan, run_launcher
+from ccs_plus.tui import PERMISSION_PRESETS, LaunchPlan, _LaunchScreen, run_launcher
 
 _T = TypeVar("_T")
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
 
-# app → provider → dir → permissions → sessions → buttons
-_NEW_SESSION_KEYS = "\r\r\r\r\r\r"
+# app → provider → permissions → sessions → buttons
+_NEW_SESSION_KEYS = "\r\r\r\r\r"
 
 
 def _drive(func: Callable[[], _T], keys: str, *, delay: float = 0.35) -> _T:
@@ -81,6 +81,15 @@ def test_launcher_default_path_launches_new_session(tmp_path: Path) -> None:
     assert plan.always_approve is None
 
 
+def test_launcher_ctrl_enter_launches_immediately(tmp_path: Path) -> None:
+    provider = _provider(AppKind.CLAUDE)
+    plan = _run(tmp_path, [provider], "\n")
+    assert plan is not None
+    assert plan.provider.id == provider.id
+    assert plan.cwd == tmp_path.resolve()
+    assert plan.session is None
+
+
 def test_launcher_keeps_provider_list_order_instead_of_sorting_by_name(tmp_path: Path) -> None:
     first = _provider(AppKind.CLAUDE, "Zulu")
     second = _provider(AppKind.CLAUDE, "Alpha")
@@ -96,14 +105,31 @@ def test_launcher_selects_codex_and_permission_preset(tmp_path: Path) -> None:
     codex = _provider(AppKind.CODEX, "Codex P")
     presets = PERMISSION_PRESETS[AppKind.CODEX]
     on_request = next(preset for preset in presets if preset.key == "on-request")
-    # app: down to codex → enter → provider → dir
-    # → permissions: down to On request (index 2) → sessions → Launch
-    keys = "\x1b[B\r\r\r\x1b[B\x1b[B\r\r\r"
+    # app: down to codex → enter → sessions → provider → permissions
+    # → down to On request (index 2) → buttons → Launch
+    keys = "\x1b[B\r\r\r\x1b[B\x1b[B\r\r"
     plan = _run(tmp_path, [claude, codex], keys)
     assert plan is not None
     assert plan.provider.app is AppKind.CODEX
     assert plan.approval_policy == on_request.approval_policy
     assert plan.sandbox_mode == on_request.sandbox_mode
+
+
+def test_launcher_opencode_app_cursor_stays_inside_rendered_rows(tmp_path: Path) -> None:
+    settings = make_app_settings(tmp_path)
+    providers = [_provider(app, app.display_name) for app in AppKind]
+    screen = _LaunchScreen(
+        settings=settings,
+        providers=providers,
+        history=LaunchHistory.load(tmp_path / "history.json"),
+        default_cwd=tmp_path,
+    )
+
+    screen._set_app(screen.apps.index(AppKind.OPENCODE))
+    content = screen._app_window.content.create_content(width=40, height=len(screen.apps))
+
+    assert content.cursor_position.y == screen.app_index
+    assert content.cursor_position.y < content.line_count
 
 
 def test_permission_presets_match_native_cli_values() -> None:
@@ -138,8 +164,8 @@ def test_permission_presets_match_native_cli_values() -> None:
 def test_launcher_selects_claude_permission_preset(tmp_path: Path) -> None:
     provider = _provider(AppKind.CLAUDE, "Claude P")
     # Default preset is bypass (index 0). Move to plan (index 3).
-    # app -> provider -> dir -> permissions x3 down -> sessions -> launch
-    keys = "\r\r\r\x1b[B\x1b[B\x1b[B\r\r\r"
+    # app -> sessions -> provider -> permissions x3 down -> buttons -> launch
+    keys = "\r\r\r\x1b[B\x1b[B\x1b[B\r\r"
     plan = _run(tmp_path, [provider], keys)
     assert plan is not None
     assert plan.permission_mode == "plan"
@@ -150,8 +176,8 @@ def test_launcher_selects_claude_permission_preset(tmp_path: Path) -> None:
 def test_launcher_selects_grok_permission_preset(tmp_path: Path) -> None:
     provider = _provider(AppKind.GROK, "Grok P")
     # Default matches settings workspace+auto (index 1). Move to read-only (index 3).
-    # app -> provider -> dir -> permissions x2 down -> sessions -> launch
-    keys = "\r\r\r\x1b[B\x1b[B\r\r\r"
+    # app -> sessions -> provider -> permissions x2 down -> buttons -> launch
+    keys = "\r\r\r\x1b[B\x1b[B\r\r"
     plan = _run(tmp_path, [provider], keys)
     assert plan is not None
     assert plan.sandbox_mode == "read-only"
@@ -233,8 +259,8 @@ def test_launcher_resume_selects_session(tmp_path: Path) -> None:
     _write_codex_session(settings, session_id=sid, cwd=session_cwd, title="resume me")
     history = LaunchHistory.load(tmp_path / "history.json")
     # Nested under default_cwd still matches this-dir scope.
-    # app → provider → dir → permissions → sessions → down (resume) → launch
-    keys = "\r\r\r\r\x1b[B\r\r"
+    # app → sessions → down (resume) → provider → permissions → launch
+    keys = "\r\x1b[B\r\r\r\r"
     plan = _drive(
         lambda: run_launcher(
             settings=settings,
@@ -277,7 +303,7 @@ def test_launcher_this_dir_hides_foreign_sessions_until_all_scope(tmp_path: Path
     history = LaunchHistory.load(tmp_path / "history.json")
 
     # Default this-dir from local: only local session is listed (New + local).
-    # app → provider → dir → permissions → sessions → down → launch
+    # app → sessions → down → provider → permissions → launch
     local_plan = _drive(
         lambda: run_launcher(
             settings=settings,
@@ -285,7 +311,7 @@ def test_launcher_this_dir_hides_foreign_sessions_until_all_scope(tmp_path: Path
             history=history,
             default_cwd=local,
         ),
-        "\r\r\r\r\x1b[B\r\r",
+        "\r\x1b[B\r\r\r\r",
         delay=0.4,
     )
     assert local_plan is not None
@@ -301,7 +327,7 @@ def test_launcher_this_dir_hides_foreign_sessions_until_all_scope(tmp_path: Path
             history=history,
             default_cwd=local,
         ),
-        "\r\r\r\ra\x1b[B\r\r",
+        "\ra\x1b[B\r\r\r\r",
         delay=0.4,
     )
     assert all_plan is not None
