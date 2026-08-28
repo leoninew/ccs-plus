@@ -234,9 +234,12 @@ def reset_providers(app_name: str | None, yes: bool) -> None:
                 click.echo(f"- {provider.app.value}/{provider.name}")
             return
         deleted = repository.reset_non_official(apps)
-        codex_home = _settings().codex.user_home
-        for provider in targets:
-            if provider.app.has_managed_profile_files:
+        profile_targets = [
+            provider for provider in targets if provider.app.has_managed_profile_files
+        ]
+        if profile_targets:
+            codex_home = _settings().codex.user_home
+            for provider in profile_targets:
                 remove_managed_config(codex_home, provider.id)
         click.echo(f"Deleted {deleted} non-official providers.")
     except ProviderError as exc:

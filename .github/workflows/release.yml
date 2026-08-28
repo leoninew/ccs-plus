@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing GitHub Release tag
+        description: Existing Git tag to release
         required: true
         type: string
 
@@ -147,12 +147,15 @@ jobs:
   upload:
     name: Upload wheel to GitHub Release
     needs: build
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    if: >-
+      (github.event_name == 'push' && github.ref_type == 'tag') ||
+      github.event_name == 'release' ||
+      github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     env:
-      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_name || github.event.release.tag_name || inputs.tag }}
       GH_TOKEN: ${{ github.token }}
 
     steps:
@@ -162,6 +165,19 @@ jobs:
           name: ccs-plus-wheel-${{ env.RELEASE_TAG }}
           path: dist
 
+      - name: Create GitHub Release from tag
+        if: >-
+          (github.event_name == 'push' && github.ref_type == 'tag') ||
+          github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "GitHub Release $RELEASE_TAG already exists."
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes
+          fi
+
       - name: Upload wheel to GitHub Release
         shell: bash
-        run: gh release upload "$RELEASE_TAG" dist/*.whl
+        run: gh release upload "$RELEASE_TAG" dist/*.whl --clobber
