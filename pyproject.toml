@@ -3,7 +3,7 @@ name = "ccs-plus"
 version = "0.26.6"
 description = "ccs-plus provider manager and CLI launcher"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "click>=8.4,<9",
     "cryptography>=50.0.0",
@@ -38,13 +38,13 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 files = ["src"]
 strict = true
 warn_unused_configs = true

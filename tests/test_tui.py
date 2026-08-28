@@ -6,7 +6,6 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import TypeVar
 
 from conftest import make_app_settings
 from prompt_toolkit.application import create_app_session
@@ -18,14 +17,13 @@ from ccs_plus.domain import AppKind, CodexAppConfig, NewProvider, Provider
 from ccs_plus.launch_history import LaunchHistory
 from ccs_plus.tui import PERMISSION_PRESETS, LaunchPlan, _LaunchScreen, run_launcher
 
-_T = TypeVar("_T")
 _CODEX = CodexAppConfig(approval_policy="never", sandbox_mode="danger-full-access")
 
 # app → provider → permissions → sessions → buttons
 _NEW_SESSION_KEYS = "\r\r\r\r\r"
 
 
-def _drive(func: Callable[[], _T], keys: str, *, delay: float = 0.35) -> _T:
+def _drive[T](func: Callable[[], T], keys: str, *, delay: float = 0.35) -> T:
     with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
 
         def send() -> None:
