@@ -172,12 +172,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "GitHub Release $RELEASE_TAG already exists."
           else
-            gh release create "$RELEASE_TAG" --verify-tag --generate-notes
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes
           fi
 
       - name: Upload wheel to GitHub Release
         shell: bash
-        run: gh release upload "$RELEASE_TAG" dist/*.whl --clobber
+        run: gh release upload "$RELEASE_TAG" dist/*.whl --repo "$GITHUB_REPOSITORY" --clobber
