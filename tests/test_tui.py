@@ -118,15 +118,16 @@ def test_launcher_selects_codex_and_permission_preset(tmp_path: Path) -> None:
 def test_launcher_opencode_app_cursor_stays_inside_rendered_rows(tmp_path: Path) -> None:
     settings = make_app_settings(tmp_path)
     providers = [_provider(app, app.display_name) for app in AppKind]
-    screen = _LaunchScreen(
-        settings=settings,
-        providers=providers,
-        history=LaunchHistory.load(tmp_path / "history.json"),
-        default_cwd=tmp_path,
-    )
+    with create_pipe_input() as pipe, create_app_session(input=pipe, output=DummyOutput()):
+        screen = _LaunchScreen(
+            settings=settings,
+            providers=providers,
+            history=LaunchHistory.load(tmp_path / "history.json"),
+            default_cwd=tmp_path,
+        )
 
-    screen._set_app(screen.apps.index(AppKind.OPENCODE))
-    content = screen._app_window.content.create_content(width=40, height=len(screen.apps))
+        screen._set_app(screen.apps.index(AppKind.OPENCODE))
+        content = screen._app_window.content.create_content(width=40, height=len(screen.apps))
 
     assert content.cursor_position.y == screen.app_index
     assert content.cursor_position.y < content.line_count

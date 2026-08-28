@@ -798,6 +798,10 @@ def test_provider_reset_deletes_all_non_official_providers_with_confirmation(mon
             return 2
 
     monkeypatch.setattr("ccs_plus.cli._repository", lambda: Repository())
+    monkeypatch.setattr(
+        "ccs_plus.cli._settings",
+        lambda: (_ for _ in ()).throw(AssertionError("Empty reset must not load settings.")),
+    )
 
     result = CliRunner().invoke(main, ["provider", "reset", "--yes"])
 
