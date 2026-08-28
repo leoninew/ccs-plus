@@ -440,7 +440,9 @@ def _create_windows_junction(source: Path, target: Path) -> None:
     import _winapi
 
     # CreateJunction(source_dir, junction_path) makes junction_path point at source_dir.
-    _winapi.CreateJunction(str(source), str(target))
+    _winapi.CreateJunction(  # type: ignore[attr-defined, unused-ignore]
+        str(source), str(target)
+    )
 
 
 def _link_file(source: Path, target: Path) -> None:

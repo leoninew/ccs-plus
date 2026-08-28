@@ -7,7 +7,6 @@
 # Artifacts are uploaded onto the release as:
 #   ccs-plus-linux-x86_64
 #   ccs-plus-macos-arm64
-#   ccs-plus-macos-x86_64
 #   ccs-plus-windows-x86_64.exe
 
 name: Release binaries
@@ -43,9 +42,6 @@ jobs:
           - os: macos-14
             artifact: ccs-plus-macos-arm64
             ext: ""
-          - os: macos-13
-            artifact: ccs-plus-macos-x86_64
-            ext: ""
           - os: windows-2022
             artifact: ccs-plus-windows-x86_64
             ext: ".exe"
@@ -54,7 +50,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          # Full history so scripts/version-calc.py (if used later) can walk commits.
           fetch-depth: 0
 
       - name: Set up Python
@@ -160,7 +155,6 @@ jobs:
           files: |
             artifacts/ccs-plus-linux-x86_64
             artifacts/ccs-plus-macos-arm64
-            artifacts/ccs-plus-macos-x86_64
             artifacts/ccs-plus-windows-x86_64.exe
           fail_on_unmatched_files: true
         env:

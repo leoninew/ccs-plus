@@ -1,6 +1,6 @@
 [project]
 name = "ccs-plus"
-version = "0.26.0"
+version = "0.26.3"
 description = "ccs-plus provider manager and CLI launcher"
 readme = "README.md"
 requires-python = ">=3.11"

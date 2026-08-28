@@ -1,0 +1,167 @@
+name: Release wheel
+
+on:
+  push:
+    branches: [develop]
+    tags:
+      - "v*"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub Release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wheel-release-${{ github.event_name == 'push' && github.ref_name || github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify wheel
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || github.event.release.tag_name || inputs.tag }}
+      BUILD_REF: ${{ github.event_name == 'push' && github.ref || github.event.release.tag_name || inputs.tag }}
+      BUILD_ID: ${{ github.event_name == 'push' && github.ref_type == 'tag' && github.ref_name || github.event_name == 'push' && format('develop-{0}', github.sha) || github.event.release.tag_name || inputs.tag }}
+
+    steps:
+      - name: Check out build ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BUILD_REF }}
+          fetch-depth: 0
+
+      - name: Verify checked out tag
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref_type == 'tag')
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync locked dependencies
+        run: uv sync --all-groups --locked
+
+      - name: Build wheel
+        run: uv build --wheel
+
+      - name: Verify release version and wheel contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import email.parser
+          import os
+          import pathlib
+          import re
+          import tomllib
+          import zipfile
+
+          tag_version = os.environ["RELEASE_TAG"].removeprefix("v")
+          pyproject = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+          project_name = pyproject["project"]["name"]
+          project_version = pyproject["project"]["version"]
+          if not isinstance(project_name, str) or not isinstance(project_version, str):
+              raise SystemExit("project name and version must be strings")
+          wheels = list(pathlib.Path("dist").glob("*.whl"))
+          if len(wheels) != 1:
+              raise SystemExit(f"expected exactly one wheel, found {len(wheels)}")
+          normalized_name = re.sub(r"[-_.]+", "_", project_name).lower()
+          normalized_version = project_version.replace("-", "_")
+          expected_prefix = f"{normalized_name}-{normalized_version}-"
+          if not wheels[0].name.lower().startswith(expected_prefix):
+              raise SystemExit(
+                  f"wheel filename {wheels[0].name!r} does not start with "
+                  f"{expected_prefix!r}"
+              )
+
+          with zipfile.ZipFile(wheels[0]) as archive:
+              names = archive.namelist()
+              metadata_name = next(
+                  (name for name in names if name.endswith(".dist-info/METADATA")),
+                  None,
+              )
+              if metadata_name is None:
+                  raise SystemExit("wheel has no dist-info/METADATA")
+              metadata = email.parser.Parser().parsestr(
+                  archive.read(metadata_name).decode("utf-8")
+              )
+              if not any(name.startswith("ccs_plus/") for name in names):
+                  raise SystemExit("wheel does not contain the ccs_plus package")
+          if metadata["Name"] != project_name:
+              raise SystemExit(
+                  f"wheel name metadata {metadata['Name']!r} does not match "
+                  f"project name {project_name!r}"
+              )
+          if tag_version:
+              if (tag_version, project_version, metadata["Version"]) != (
+                  project_version,
+                  project_version,
+                  project_version,
+              ):
+                  raise SystemExit(
+                      f"release versions differ: tag={tag_version!r}, "
+                      f"project={project_version!r}, wheel={metadata['Version']!r}"
+                  )
+              print(f"validated {wheels[0].name} for release {os.environ['RELEASE_TAG']}")
+          else:
+              print(f"validated {wheels[0].name} for develop ({project_version})")
+          PY
+
+      - name: Install and smoke test wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel="$(find dist -maxdepth 1 -type f -name '*.whl' -print -quit)"
+          check_dir="$RUNNER_TEMP/ccs-plus-wheel-check"
+          python -m venv "$check_dir"
+          check_python="$check_dir/bin/python"
+          "$check_python" -m pip install --disable-pip-version-check --no-input "$wheel"
+          "$check_python" -c 'import ccs_plus'
+          "$check_dir/bin/ccs-plus" --help >/dev/null
+
+      - name: Upload verified wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccs-plus-wheel-${{ env.BUILD_ID }}
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 14
+
+  upload:
+    name: Upload wheel to GitHub Release
+    needs: build
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Download verified wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ccs-plus-wheel-${{ env.RELEASE_TAG }}
+          path: dist
+
+      - name: Upload wheel to GitHub Release
+        shell: bash
+        run: gh release upload "$RELEASE_TAG" dist/*.whl
