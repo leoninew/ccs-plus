@@ -17,7 +17,7 @@ wheels = [
 
 [[package]]
 name = "ccs-plus"
-version = "0.26.6"
+version = "0.26.12"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
