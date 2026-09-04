@@ -851,10 +851,10 @@ def test_provider_show_renders_delete_then_redacted_add_commands(monkeypatch) ->
 
     assert result.exit_code == 0
     assert result.output == (
-        "ccsp provider delete claude 'Example Provider' --yes\n"
-        "ccsp provider add claude --name 'Example Provider' "
-        "--endpoint 'https://api.example.test/v1' --api-key 'xxxx' "
-        "--model 'example-model' --effort 'high'\n"
+        'ccsp provider delete claude "Example Provider" --yes\n'
+        'ccsp provider add claude --name "Example Provider" '
+        '--endpoint "https://api.example.test/v1" --api-key "xxxx" '
+        '--model "example-model" --effort "high"\n'
     )
     assert "cli-secret-key" not in result.output
 
@@ -886,11 +886,11 @@ def test_provider_show_secret_includes_api_key(monkeypatch) -> None:
     result = CliRunner().invoke(main, ["provider", "show", provider.name, "--show-secret"])
 
     assert result.exit_code == 0
-    assert "--api-key 'cli-secret-key'" in result.output
+    assert '--api-key "cli-secret-key"' in result.output
 
 
-def test_provider_show_quotes_arguments_for_bash(monkeypatch) -> None:
-    provider = _provider(name="O'Connor")
+def test_provider_show_quotes_arguments_with_double_quotes(monkeypatch) -> None:
+    provider = _provider(name='O\'Connor "quoted"')
 
     class Repository:
         def find_by_name(self, name):
@@ -901,8 +901,8 @@ def test_provider_show_quotes_arguments_for_bash(monkeypatch) -> None:
     result = CliRunner().invoke(main, ["provider", "show", provider.name])
 
     assert result.exit_code == 0
-    assert "ccsp provider delete claude 'O'\"'\"'Connor' --yes" in result.output
-    assert "--name 'O'\"'\"'Connor'" in result.output
+    assert 'ccsp provider delete claude "O\'Connor ""quoted""" --yes' in result.output
+    assert '--name "O\'Connor ""quoted"""' in result.output
 
 
 def test_provider_delete_requires_confirmation() -> None:

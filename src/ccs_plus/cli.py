@@ -537,7 +537,7 @@ def _provider_show_commands(provider: Provider, *, show_secret: bool) -> tuple[s
 
 
 def _provider_delete_command(provider: Provider) -> str:
-    return f"ccsp provider delete {provider.app.value} {_bash_quote(provider.name)} --yes"
+    return f"ccsp provider delete {provider.app.value} {_command_quote(provider.name)} --yes"
 
 
 def _provider_add_command(provider: Provider, *, show_secret: bool) -> str:
@@ -554,15 +554,15 @@ def _provider_add_command(provider: Provider, *, show_secret: bool) -> str:
 
     options = [
         f"ccsp provider add {provider.app.value}",
-        f"--name {_bash_quote(provider.name)}",
-        f"--endpoint {_bash_quote(display.endpoint or _first_endpoint(provider))}",
-        f"--api-key {_bash_quote(api_key if show_secret else 'xxxx')}",
-        f"--model {_bash_quote(model)}",
+        f"--name {_command_quote(provider.name)}",
+        f"--endpoint {_command_quote(display.endpoint or _first_endpoint(provider))}",
+        f"--api-key {_command_quote(api_key if show_secret else 'xxxx')}",
+        f"--model {_command_quote(model)}",
     ]
     if effort is not None:
-        options.append(f"--effort {_bash_quote(effort)}")
+        options.append(f"--effort {_command_quote(effort)}")
     if provider.notes is not None:
-        options.append(f"--notes {_bash_quote(provider.notes)}")
+        options.append(f"--notes {_command_quote(provider.notes)}")
     return " ".join(options)
 
 
@@ -570,6 +570,6 @@ def _first_endpoint(provider: Provider) -> str | None:
     return provider.endpoints[0] if provider.endpoints else None
 
 
-def _bash_quote(value: str | None) -> str:
-    """Quote one literal argument for the Bash commands shown to users."""
-    return "'" + (value or "").replace("'", "'\"'\"'") + "'"
+def _command_quote(value: str | None) -> str:
+    """Quote one literal argument with double quotes for displayed commands."""
+    return '"' + (value or "").replace('"', '""') + '"'
